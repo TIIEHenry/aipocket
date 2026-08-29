@@ -333,3 +333,36 @@ async fn app_serves_static_fallback_and_specific_cors_origins() {
     assert!(String::from_utf8_lossy(&body).contains("fixture"));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn scan_status_exposes_skipped_sources_field() {
+    let app = app().await;
+    let login = app
+        .clone()
+        .oneshot(
+            Request::post("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"password":"test-password"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let login: Value =
+        serde_json::from_slice(&login.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let response = app
+        .oneshot(
+            Request::get("/api/scan/status")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", login["token"].as_str().unwrap()),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(body["skipped_sources"].is_array());
+}

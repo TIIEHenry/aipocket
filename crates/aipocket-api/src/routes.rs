@@ -1312,26 +1312,6 @@ struct ScanStart {
 fn all_source() -> String {
     "all".into()
 }
-fn discovery_queries(
-    selected_packs: &[&aipocket_discovery::packs::ProviderPack],
-) -> (Vec<String>, Vec<String>) {
-    let mut fofa = aipocket_discovery::legacy_queries::fofa_queries();
-    fofa.extend(
-        selected_packs
-            .iter()
-            .flat_map(|pack| pack.fofa_queries)
-            .map(|query| query.to_string()),
-    );
-    let mut shodan = selected_packs
-        .iter()
-        .flat_map(|pack| pack.shodan_queries)
-        .map(|query| query.to_string())
-        .collect::<Vec<_>>();
-    shodan.extend(aipocket_discovery::legacy_queries::shodan_product_queries());
-    aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut fofa);
-    aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut shodan);
-    (fofa, shodan)
-}
 
 #[cfg(test)]
 mod key_probe_tests {
@@ -1374,32 +1354,6 @@ mod key_probe_tests {
 #[cfg(test)]
 mod scan_query_tests {
     use super::*;
-
-    #[test]
-    fn web_full_scan_includes_legacy_product_queries() {
-        let registry = aipocket_discovery::packs::registry();
-        let selected = registry.values().copied().collect::<Vec<_>>();
-        let (fofa, shodan) = discovery_queries(&selected);
-        assert!(fofa.len() > 60);
-        assert!(fofa.iter().any(|query| query.contains("litellm_proxy")));
-        assert!(fofa.iter().any(|query| query.contains("dify")));
-        assert!(
-            fofa.iter()
-                .any(|query| query.contains("api.deepseek.com") && query.contains("sk-"))
-        );
-        assert!(
-            fofa.iter()
-                .any(|query| query.contains("api.cursor.com") && query.contains("crsr_"))
-        );
-        assert!(fofa.iter().any(|query| query.contains("sub2api")));
-        assert!(fofa.iter().any(|query| query.contains("CLIProxyAPI")));
-        assert!(
-            fofa.first()
-                .is_some_and(|query| query.starts_with("header="))
-        );
-        assert!(shodan.iter().any(|query| query == "http.html:sk-"));
-        assert!(shodan.iter().any(|query| query.contains("litellm_proxy")));
-    }
 
     #[test]
     fn cve_search_items_are_normalized_before_persistence() {
@@ -1467,93 +1421,27 @@ async fn scan_start(
     let scanner = s.scanner.clone();
     let settings = s.settings.read().await.clone();
     let http = s.http.clone();
+    let manual_targets = if sources.iter().any(|v| v == "manual") {
+        scanner.manual_targets().await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let plan = aipocket_services::assemble_sources(
+        &settings,
+        &http,
+        &aipocket_services::AssembleParams {
+            requested: sources,
+            github_pack_ids: b.github_pack_ids.clone(),
+            manual_enrich: b.manual_enrich.clone(),
+            resume_run_id: b.resume_run_id.clone(),
+            manual_targets,
+        },
+    );
+    s.scan_manager.set_skipped(plan.skipped).await;
     tokio::spawn(async move {
-        let registry = aipocket_discovery::packs::registry();
-        let selected_packs: Vec<_> =
-            if b.github_pack_ids.is_empty() || b.github_pack_ids.iter().any(|v| v == "all") {
-                registry.values().copied().collect()
-            } else {
-                b.github_pack_ids
-                    .iter()
-                    .filter_map(|id| registry.get(id.as_str()).copied())
-                    .collect()
-            };
-        let (fofa_queries, shodan_queries) = discovery_queries(&selected_packs);
-        let mut discovery: Vec<std::sync::Arc<dyn aipocket_discovery::DiscoverySource>> =
-            Vec::new();
-        if sources.iter().any(|v| v == "all" || v == "fofa") {
-            discovery.push(std::sync::Arc::new(
-                aipocket_discovery::sources::FofaSource {
-                    client: aipocket_clients::FofaClient::new(http.clone(), &settings),
-                    queries: fofa_queries,
-                    page_size: settings.fofa_page_size,
-                    max_pages: settings.fofa_max_pages,
-                    page_delay: settings.fofa_page_delay,
-                },
-            ));
-        }
-        if sources.iter().any(|v| v == "all" || v == "shodan") {
-            discovery.push(std::sync::Arc::new(
-                aipocket_discovery::sources::ShodanSource {
-                    client: aipocket_clients::ShodanClient::new(http.clone(), &settings),
-                    queries: shodan_queries,
-                    max_pages: settings.shodan_max_pages,
-                    page_delay: settings.shodan_page_delay,
-                },
-            ));
-        }
-        if sources.iter().any(|v| v == "all" || v == "github")
-            && !settings.github_token_list().is_empty()
-            && settings.pg_enabled()
-        {
-            discovery.push(std::sync::Arc::new(
-                aipocket_discovery::sources::GithubSource {
-                    client: aipocket_clients::GithubClient::new(http.clone(), &settings),
-                    queries: {
-                        let mut queries = selected_packs
-                            .iter()
-                            .flat_map(|p| p.github_terms)
-                            .map(|v| v.to_string())
-                            .collect();
-                        aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut queries);
-                        queries
-                    },
-                    per_page: settings.github_search_page_size,
-                    run_id: b.resume_run_id.clone(),
-                    pack_id: if b.github_pack_ids.len() == 1 {
-                        b.github_pack_ids[0].clone()
-                    } else {
-                        String::new()
-                    },
-                },
-            ));
-        }
-        if sources.iter().any(|v| v == "manual") {
-            let targets = scanner.manual_targets().await.unwrap_or_default();
-            discovery.push(std::sync::Arc::new(
-                aipocket_discovery::sources::ManualSource { targets },
-            ));
-        }
-        if sources.iter().any(|v| v == "manual") && !b.manual_enrich.is_empty() {
-            let targets = scanner.manual_targets().await.unwrap_or_default();
-            let engines = b
-                .manual_enrich
-                .iter()
-                .map(|engine| engine.trim().to_ascii_lowercase())
-                .filter(|engine| engine == "fofa" || engine == "shodan")
-                .collect::<Vec<_>>();
-            discovery.push(std::sync::Arc::new(
-                aipocket_discovery::sources::ManualEnrichSource {
-                    targets,
-                    engines,
-                    fofa: aipocket_clients::FofaClient::new(http.clone(), &settings),
-                    shodan: aipocket_clients::ShodanClient::new(http.clone(), &settings),
-                },
-            ));
-        }
         let resume = (!b.resume_run_id.is_empty()).then_some(b.resume_run_id.clone());
         if let Err(error) = scanner
-            .run_resumable(discovery, b.mode, resume.clone(), cancel, tx.clone())
+            .run_resumable(plan.sources, b.mode, resume.clone(), cancel, tx.clone())
             .await
         {
             // run_id is created inside the scanner; without resume the old path used
