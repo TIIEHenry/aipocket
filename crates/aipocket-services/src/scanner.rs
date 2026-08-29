@@ -1,12 +1,12 @@
 use crate::pipeline::{as_json, extract_credentials, finalize_results, high_value_record};
-use aipocket_core::{Credential, ScanMode, ScanProgress, Settings};
+use aipocket_core::{Credential, PipelinePhase, ScanMode, ScanProgress, Settings};
 use aipocket_db::{DedupStore, Repository, RequestLedgerEntry, ScanLease};
 use aipocket_discovery::{DiscoveryProgress, DiscoverySource, SourceBudgets};
 use aipocket_prober::Validator;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -33,6 +33,15 @@ pub struct Scanner {
     settings: Arc<Settings>,
     repository: Repository,
     http: reqwest::Client,
+}
+
+struct HitStage<'a> {
+    run_id: &'a str,
+    memory_hits: &'a [Value],
+    dedup: &'a DedupStore,
+    policy: &'a aipocket_core::ScanPolicy,
+    honeypots: &'a HashSet<String>,
+    page_size: usize,
 }
 impl Scanner {
     pub fn new(settings: Arc<Settings>, repository: Repository, http: reqwest::Client) -> Self {
@@ -97,13 +106,20 @@ impl Scanner {
                 run_id: run_id.clone(),
             })
             .ok();
-        let resume_phase = self.repository.resume_phase(&run_id).await?;
+        let stored_phase = self.repository.resume_phase(&run_id).await?;
         let mut progress = ScanProgress::default();
         let mut hits = Vec::new();
-        events.send(ScanEvent::Phase("discovery".into())).ok();
-        self.repository
-            .update_phase(&run_id, "discovery", serde_json::json!({}))
-            .await?;
+        let mut seen_targets = HashSet::new();
+        let (spilled_hits, spilled_candidates) = if let Some(pool) = self.repository.pool() {
+            (
+                aipocket_db::count_discovery_hits(pool, &run_id).await?,
+                aipocket_db::count_candidates(pool, &run_id).await?,
+            )
+        } else {
+            (0, 0)
+        };
+        let mut completed =
+            PipelinePhase::reconcile(stored_phase.as_deref(), spilled_hits, spilled_candidates);
         let budgets = SourceBudgets {
             fofa: Some(self.settings.fofa_query_budget),
             shodan: Some(self.settings.shodan_query_budget),
@@ -114,19 +130,13 @@ impl Scanner {
             progress: None,
         };
         let policy = aipocket_core::ScanPolicy::from_mode(mode.clone());
-        if resume_phase
-            .as_deref()
-            .is_some_and(|phase| phase_rank(phase) >= phase_rank("extract"))
-            && let Some(pool) = self.repository.pool()
-        {
-            hits = aipocket_db::load_discovery_hits(pool, &run_id).await?;
-            progress.raw_hits = hits.len() as u64;
+        if completed >= PipelinePhase::Discovery {
+            progress.raw_hits = spilled_hits;
         }
         let mut query_metrics =
             std::collections::BTreeMap::<(String, String), aipocket_db::QueryMetricRecord>::new();
-        // FOFA/Shodan first: do not block primary discovery behind pending GitHub blob
-        // drains (slow/403 tokens previously left the UI stuck in discovery with 0 hits).
-        if hits.is_empty() {
+        if completed < PipelinePhase::Discovery {
+            events.send(ScanEvent::Phase("discovery".into())).ok();
             for source in sources {
                 if cancel.is_cancelled() {
                     return self.interrupt(&run_id, progress, lease, &events).await;
@@ -150,6 +160,7 @@ impl Scanner {
                         &query_ids,
                         self.settings.planner_metrics_version,
                         query_budget,
+                        self.settings.query_exploration_ratio,
                     )
                     .await?;
                 let mut checkpoints = Vec::new();
@@ -270,8 +281,20 @@ impl Scanner {
                             aipocket_db::advance_checkpoints_with_work(pool, &checkpoints, &work)
                                 .await?;
                         }
-                        hits.append(&mut fetched.host_hits);
-                        credentials_from_observations(&mut hits, fetched.credential_observations);
+                        self.absorb_hits(
+                            &run_id,
+                            &mut fetched.host_hits,
+                            &mut hits,
+                            &mut seen_targets,
+                        )
+                        .await?;
+                        let mut observed = Vec::new();
+                        credentials_from_observations(
+                            &mut observed,
+                            fetched.credential_observations,
+                        );
+                        self.absorb_hits(&run_id, &mut observed, &mut hits, &mut seen_targets)
+                            .await?;
                         for error in fetched.errors {
                             events
                                 .send(ScanEvent::Log(format!(
@@ -299,236 +322,221 @@ impl Scanner {
                     }
                 };
             }
-        }
-        if cancel.is_cancelled() {
-            return self.interrupt(&run_id, progress, lease, &events).await;
-        }
-        // Drain previously-enqueued GitHub artifact work after host discovery so a
-        // slow/broken token pool cannot stall FOFA/Shodan.
-        if let Some(pool) = self.repository.pool() {
-            let pending = aipocket_db::claim_artifact_work(pool, 200).await?;
-            if !pending.is_empty() {
-                events
-                    .send(ScanEvent::Log(format!(
-                        "processing {} pending GitHub artifact work items",
-                        pending.len()
-                    )))
-                    .ok();
-                let observations = tokio::select! {
-                    _ = cancel.cancelled() => {
-                        return self.interrupt(&run_id, progress, lease, &events).await;
-                    }
-                    observations = self.process_github_work(pool, pending, &events) => observations,
-                };
-                credentials_from_observations(&mut hits, observations);
+            if cancel.is_cancelled() {
+                return self.interrupt(&run_id, progress, lease, &events).await;
             }
-        }
-        if cancel.is_cancelled() {
-            return self.interrupt(&run_id, progress, lease, &events).await;
-        }
-        if let Some(pool) = self.repository.pool() {
-            aipocket_db::upsert_discovery_hits(pool, &run_id, &hits).await?;
-        }
-        self.repository
-            .update_phase(
+            // Drain previously-enqueued GitHub artifact work after host discovery so a
+            // slow/broken token pool cannot stall FOFA/Shodan.
+            if let Some(pool) = self.repository.pool() {
+                let pending = aipocket_db::claim_artifact_work(pool, 200).await?;
+                if !pending.is_empty() {
+                    events
+                        .send(ScanEvent::Log(format!(
+                            "processing {} pending GitHub artifact work items",
+                            pending.len()
+                        )))
+                        .ok();
+                    let observations = tokio::select! {
+                        _ = cancel.cancelled() => {
+                            return self.interrupt(&run_id, progress, lease, &events).await;
+                        }
+                        observations = self.process_github_work(pool, pending, &events) => observations,
+                    };
+                    let mut observed = Vec::new();
+                    credentials_from_observations(&mut observed, observations);
+                    self.absorb_hits(&run_id, &mut observed, &mut hits, &mut seen_targets)
+                        .await?;
+                }
+            }
+            if cancel.is_cancelled() {
+                return self.interrupt(&run_id, progress, lease, &events).await;
+            }
+            progress.unique_targets = seen_targets.len() as u64;
+            self.persist_phase(
                 &run_id,
-                "validate",
-                serde_json::json!({"raw_hits":progress.raw_hits}),
+                PipelinePhase::Discovery,
+                serde_json::json!({"raw_hits": progress.raw_hits}),
             )
             .await?;
-        progress.unique_targets = distinct_target_count(&hits);
+            completed = PipelinePhase::Discovery;
+        }
         for metric in query_metrics.values_mut() {
             metric.funnel.unique_targets = metric.funnel.raw_hits;
         }
-        events
-            .send(ScanEvent::Phase("extract_validate".into()))
-            .ok();
         let dedup = DedupStore::connect(&self.settings).await;
         let known_honeypot_groups = self.repository.known_honeypot_groups().await?;
-        let mut unseen_hits = Vec::with_capacity(hits.len());
-        for hit in hits {
-            let target = hit
-                .get("host")
-                .or_else(|| hit.get("url"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let group = aipocket_core::url_sanitize::honeypot_group_key(target).ok();
-            if group
-                .as_ref()
-                .is_some_and(|group| known_honeypot_groups.contains(group))
-            {
-                continue;
-            }
-            if !policy.use_cross_run_dedup
-                || target.is_empty()
-                || !dedup.target_seen("probe", target).await
-            {
-                unseen_hits.push(hit);
-            }
-        }
-        hits = unseen_hits;
-        let validator = Validator::new(self.http.clone());
-        let mut outcomes = Vec::new();
-        let mut ledger = Vec::new();
-        let mut probed = tokio::select! {
-            _ = cancel.cancelled() => {
-                return self.interrupt(&run_id, progress, lease, &events).await;
-            }
-            probed = self.probe_hits(&hits, &events) => probed,
+        let hit_page_size = self.settings.prober_batch_size.max(1);
+        let hit_stage = HitStage {
+            run_id: &run_id,
+            memory_hits: &hits,
+            dedup: &dedup,
+            policy: &policy,
+            honeypots: &known_honeypot_groups,
+            page_size: hit_page_size,
         };
-        for hit in &hits {
-            if let Some(target) = hit
-                .get("host")
-                .or_else(|| hit.get("url"))
-                .and_then(Value::as_str)
-                && !target.is_empty()
-            {
-                dedup.mark_host(target).await;
-                dedup.mark_target("probe", target).await;
-            }
+        let mut credentials = Vec::new();
+        if completed < PipelinePhase::Extract {
+            events.send(ScanEvent::Phase("extract".into())).ok();
+            let extracted = tokio::select! {
+                _ = cancel.cancelled() => {
+                    return self.interrupt(&run_id, progress, lease, &events).await;
+                }
+                extracted = self.extract_from_hits(&hit_stage) => extracted,
+            }?;
+            self.persist_credentials(&run_id, &extracted).await?;
+            credentials.extend(extracted);
+            self.persist_phase(&run_id, PipelinePhase::Extract, serde_json::json!({}))
+                .await?;
+            completed = PipelinePhase::Extract;
         }
-        let mut credentials = if resume_phase
-            .as_deref()
-            .is_some_and(|phase| phase_rank(phase) >= phase_rank("validate"))
-        {
-            if let Some(pool) = self.repository.pool() {
-                aipocket_db::load_candidate_page(pool, &run_id, 0, i64::MAX)
-                    .await?
-                    .into_iter()
-                    .map(|(_, credential)| credential)
-                    .collect()
-            } else {
-                Vec::new()
-            }
-        } else {
-            let mut extracted = extract_credentials(&hits);
-            extracted.append(&mut probed);
-            extracted
-        };
+        if completed < PipelinePhase::Probe {
+            events.send(ScanEvent::Phase("probe".into())).ok();
+            let probed = tokio::select! {
+                _ = cancel.cancelled() => {
+                    return self.interrupt(&run_id, progress, lease, &events).await;
+                }
+                probed = self.probe_from_hits(&hit_stage, &events) => probed,
+            }?;
+            self.persist_credentials(&run_id, &probed).await?;
+            credentials.extend(probed);
+            self.persist_phase(&run_id, PipelinePhase::Probe, serde_json::json!({}))
+                .await?;
+            completed = PipelinePhase::Probe;
+        }
         let run_dir = self
             .settings
             .write_jsonl()
             .then(|| self.settings.results_path().join(&run_id));
         let analyzer = crate::Analyzer::new(self.settings.clone(), self.http.clone());
-        if resume_phase
-            .as_deref()
-            .is_none_or(|phase| phase_rank(phase) < phase_rank("validate"))
-        {
-            let gpt_report = tokio::select! {
+        if completed < PipelinePhase::Gpt {
+            events.send(ScanEvent::Phase("gpt".into())).ok();
+            let gpt_credentials = tokio::select! {
                 _ = cancel.cancelled() => {
                     return self.interrupt(&run_id, progress, lease, &events).await;
                 }
-                report = analyzer.extract(&hits, run_dir.as_deref()) => report,
-            };
-            credentials.extend(gpt_report.credentials);
+                report = self.gpt_from_hits(&analyzer, &hit_stage, run_dir.as_deref()) => report,
+            }?;
+            self.persist_credentials(&run_id, &gpt_credentials).await?;
+            credentials.extend(gpt_credentials);
+            self.persist_phase(&run_id, PipelinePhase::Gpt, serde_json::json!({}))
+                .await?;
+            completed = PipelinePhase::Gpt;
         }
-        if let Some(pool) = self.repository.pool() {
-            aipocket_db::upsert_candidates(pool, &run_id, &credentials).await?;
+        if credentials.is_empty() {
+            credentials = self.load_all_candidates_paged(&run_id).await?;
         }
+        let validator = Validator::new(self.http.clone());
+        let mut outcomes = Vec::new();
+        let mut ledger = Vec::new();
         progress.candidates = credentials.len() as u64;
         events.send(ScanEvent::Progress(progress.clone())).ok();
-        for chunk in credentials.chunks(self.settings.validate_batch_size.max(1)) {
-            if cancel.is_cancelled() {
-                return self.interrupt(&run_id, progress, lease, &events).await;
-            }
-            let semaphore = Arc::new(tokio::sync::Semaphore::new(
-                self.settings.validate_concurrency.max(1),
-            ));
-            let mut tasks = tokio::task::JoinSet::new();
-            for credential in chunk.iter().cloned() {
-                if !policy.require_fresh_verification {
-                    if let Some(cached) = dedup
-                        .get_success::<aipocket_core::ValidationResult>(&credential)
-                        .await
-                    {
-                        outcomes.push(cached);
-                        continue;
-                    }
-                    if dedup.get_outcome(&credential).await.is_some() {
-                        continue;
-                    }
+        if completed < PipelinePhase::Validate {
+            events.send(ScanEvent::Phase("validate".into())).ok();
+            for chunk in credentials.chunks(self.settings.validate_batch_size.max(1)) {
+                if cancel.is_cancelled() {
+                    return self.interrupt(&run_id, progress, lease, &events).await;
                 }
-                progress.active_requests += 1;
-                let validator = validator.clone();
-                let semaphore = semaphore.clone();
-                let run_id = run_id.clone();
-                tasks.spawn(async move {
-                    let _permit = semaphore.acquire_owned().await.ok();
-                    let mut entry = RequestLedgerEntry::new(&run_id, "validation");
-                    entry.source = credential.backend.clone();
-                    entry.query_id = if credential.source.is_empty() {
-                        credential.backend.clone()
-                    } else {
-                        credential.source.clone()
+                let semaphore = Arc::new(tokio::sync::Semaphore::new(
+                    self.settings.validate_concurrency.max(1),
+                ));
+                let mut tasks = tokio::task::JoinSet::new();
+                for credential in chunk.iter().cloned() {
+                    if !policy.require_fresh_verification {
+                        if let Some(cached) = dedup
+                            .get_success::<aipocket_core::ValidationResult>(&credential)
+                            .await
+                        {
+                            outcomes.push(cached);
+                            continue;
+                        }
+                        if dedup.get_outcome(&credential).await.is_some() {
+                            continue;
+                        }
+                    }
+                    progress.active_requests += 1;
+                    let validator = validator.clone();
+                    let semaphore = semaphore.clone();
+                    let run_id = run_id.clone();
+                    tasks.spawn(async move {
+                        let _permit = semaphore.acquire_owned().await.ok();
+                        let mut entry = RequestLedgerEntry::new(&run_id, "validation");
+                        entry.source = credential.backend.clone();
+                        entry.query_id = if credential.source.is_empty() {
+                            credential.backend.clone()
+                        } else {
+                            credential.source.clone()
+                        };
+                        entry.provider = credential.product.clone();
+                        let result = validator.validate(credential.clone()).await;
+                        (credential, entry, result)
+                    });
+                }
+                while let Some(joined) = tokio::select! {
+                    _ = cancel.cancelled() => {
+                        return self.interrupt(&run_id, progress, lease, &events).await;
+                    }
+                    joined = tasks.join_next() => joined,
+                } {
+                    let Ok((credential, mut entry, result)) = joined else {
+                        events
+                            .send(ScanEvent::Log("validation task failed in isolation".into()))
+                            .ok();
+                        continue;
                     };
-                    entry.provider = credential.product.clone();
-                    let result = validator.validate(credential.clone()).await;
-                    (credential, entry, result)
-                });
+                    match result {
+                        Ok(result) => {
+                            entry.status_code = result.status_code.map(i32::from);
+                            entry.status_class = result
+                                .status_code
+                                .map(|code| format!("{}xx", code / 100))
+                                .unwrap_or_default();
+                            if result.valid {
+                                dedup.set_success(&credential, &result).await;
+                            } else if result.validation_state == "rejected" {
+                                dedup.set_outcome(&credential, "rejected").await;
+                            }
+                            outcomes.push(result);
+                        }
+                        Err(error) => {
+                            entry.error_class = "transport".into();
+                            entry.status_class = "error".into();
+                            dedup.set_outcome(&credential, "transient").await;
+                            events.send(ScanEvent::Log(error.to_string())).ok();
+                        }
+                    }
+                    let query_key = (entry.source.clone(), entry.query_id.clone());
+                    if let Some(metric) = query_metrics.get_mut(&query_key) {
+                        metric.funnel.active_requests += 1;
+                        metric.funnel.total_active_http_requests += 1;
+                        if entry.status_class == "2xx" {
+                            metric.funnel.final_verified += 1;
+                        }
+                    }
+                    ledger.push(entry);
+                }
+                if let Some(pool) = self.repository.pool() {
+                    aipocket_db::upsert_validation_results(pool, &run_id, &outcomes).await?;
+                }
+                self.repository.append_ledger(&ledger).await?;
+                ledger.clear();
+                events.send(ScanEvent::Progress(progress.clone())).ok();
             }
-            while let Some(joined) = tokio::select! {
+            tokio::select! {
                 _ = cancel.cancelled() => {
                     return self.interrupt(&run_id, progress, lease, &events).await;
                 }
-                joined = tasks.join_next() => joined,
-            } {
-                let Ok((credential, mut entry, result)) = joined else {
-                    events
-                        .send(ScanEvent::Log("validation task failed in isolation".into()))
-                        .ok();
-                    continue;
-                };
-                match result {
-                    Ok(result) => {
-                        entry.status_code = result.status_code.map(i32::from);
-                        entry.status_class = result
-                            .status_code
-                            .map(|code| format!("{}xx", code / 100))
-                            .unwrap_or_default();
-                        if result.valid {
-                            dedup.set_success(&credential, &result).await;
-                        } else if result.validation_state == "rejected" {
-                            dedup.set_outcome(&credential, "rejected").await;
-                        }
-                        outcomes.push(result);
-                    }
-                    Err(error) => {
-                        entry.error_class = "transport".into();
-                        entry.status_class = "error".into();
-                        dedup.set_outcome(&credential, "transient").await;
-                        events.send(ScanEvent::Log(error.to_string())).ok();
-                    }
-                }
-                let query_key = (entry.source.clone(), entry.query_id.clone());
-                if let Some(metric) = query_metrics.get_mut(&query_key) {
-                    metric.funnel.active_requests += 1;
-                    metric.funnel.total_active_http_requests += 1;
-                    if entry.status_class == "2xx" {
-                        metric.funnel.final_verified += 1;
-                    }
-                }
-                ledger.push(entry);
+                _ = analyzer.recheck(&mut outcomes) => {}
             }
-            if let Some(pool) = self.repository.pool() {
-                aipocket_db::upsert_validation_results(pool, &run_id, &outcomes).await?;
-            }
-            self.repository.append_ledger(&ledger).await?;
-            ledger.clear();
-            events.send(ScanEvent::Progress(progress.clone())).ok();
-        }
-        tokio::select! {
-            _ = cancel.cancelled() => {
-                return self.interrupt(&run_id, progress, lease, &events).await;
-            }
-            _ = analyzer.recheck(&mut outcomes) => {}
+            self.persist_phase(&run_id, PipelinePhase::Validate, serde_json::json!({}))
+                .await?;
+        } else if let Some(pool) = self.repository.pool() {
+            outcomes = aipocket_db::load_validation_results(pool, &run_id).await?;
         }
         self.repository
             .upsert_honeypot_results(&run_id, &outcomes)
             .await?;
         let (mut valid_results, mut suspicious_results) = finalize_results(outcomes);
-        events
-            .send(ScanEvent::Phase("balance_finalize".into()))
-            .ok();
+        events.send(ScanEvent::Phase("finalize".into())).ok();
         let balance = crate::BalanceService::new(self.http.clone());
         for result in &mut valid_results {
             if cancel.is_cancelled() {
@@ -618,20 +626,22 @@ impl Scanner {
             .iter()
             .map(as_json)
             .collect::<Result<Vec<_>>>()?;
-        self.write_artifacts(&run_id, &hits, &valid, &suspicious)?;
+        self.write_artifacts(&run_id, &hits, &valid, &suspicious)
+            .await?;
         self.repository
             .insert_results(&run_id, "valid", &valid)
             .await?;
         self.repository
             .insert_results(&run_id, "suspicious", &suspicious)
             .await?;
-        self.repository
-            .update_phase(
-                &run_id,
-                "finished",
-                serde_json::json!({"resumed_from":resume_phase}),
-            )
+        self.persist_phase(&run_id, PipelinePhase::Finalize, serde_json::json!({}))
             .await?;
+        self.persist_phase(
+            &run_id,
+            PipelinePhase::Finished,
+            serde_json::json!({"resumed_from": stored_phase}),
+        )
+        .await?;
         self.repository
             .persist_query_metrics(&run_id, &query_metrics.into_values().collect::<Vec<_>>())
             .await?;
@@ -654,6 +664,197 @@ impl Scanner {
             lease.release().await.ok();
         }
         Ok(run_id)
+    }
+
+    async fn persist_phase(&self, run_id: &str, phase: PipelinePhase, detail: Value) -> Result<()> {
+        self.repository
+            .update_phase(run_id, phase.as_str(), detail)
+            .await
+    }
+
+    async fn absorb_hits(
+        &self,
+        run_id: &str,
+        incoming: &mut Vec<Value>,
+        memory_hits: &mut Vec<Value>,
+        seen_targets: &mut HashSet<String>,
+    ) -> Result<()> {
+        for hit in incoming.iter() {
+            let target = hit_target(hit);
+            if !target.is_empty() {
+                seen_targets.insert(target.to_owned());
+            }
+        }
+        if let Some(pool) = self.repository.pool() {
+            aipocket_db::upsert_discovery_hits(pool, run_id, incoming).await?;
+            incoming.clear();
+        } else {
+            memory_hits.append(incoming);
+        }
+        Ok(())
+    }
+
+    async fn persist_credentials(&self, run_id: &str, credentials: &[Credential]) -> Result<()> {
+        if credentials.is_empty() {
+            return Ok(());
+        }
+        if let Some(pool) = self.repository.pool() {
+            aipocket_db::upsert_candidates(pool, run_id, credentials).await?;
+        }
+        Ok(())
+    }
+
+    async fn load_all_candidates_paged(&self, run_id: &str) -> Result<Vec<Credential>> {
+        let Some(pool) = self.repository.pool() else {
+            return Ok(Vec::new());
+        };
+        let mut credentials = Vec::new();
+        let mut after_id = 0_i64;
+        let limit = self.settings.validate_batch_size.max(1) as i64;
+        loop {
+            let page = aipocket_db::load_candidate_page(pool, run_id, after_id, limit).await?;
+            if page.is_empty() {
+                break;
+            }
+            after_id = page.last().map(|(id, _)| *id).unwrap_or(after_id);
+            credentials.extend(page.into_iter().map(|(_, credential)| credential));
+        }
+        Ok(credentials)
+    }
+
+    async fn next_hit_page(
+        &self,
+        run_id: &str,
+        memory_hits: &[Value],
+        after_id: &mut i64,
+        offset: &mut usize,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        if let Some(pool) = self.repository.pool() {
+            let page =
+                aipocket_db::load_discovery_hit_page(pool, run_id, *after_id, limit as i64).await?;
+            if let Some((id, _)) = page.last() {
+                *after_id = *id;
+            }
+            return Ok(page.into_iter().map(|(_, record)| record).collect());
+        }
+        if *offset >= memory_hits.len() {
+            return Ok(Vec::new());
+        }
+        let end = (*offset + limit).min(memory_hits.len());
+        let page = memory_hits[*offset..end].to_vec();
+        *offset = end;
+        Ok(page)
+    }
+
+    async fn extract_from_hits(&self, stage: &HitStage<'_>) -> Result<Vec<Credential>> {
+        let mut after_id = 0_i64;
+        let mut offset = 0_usize;
+        let mut credentials = Vec::new();
+        loop {
+            let page = self
+                .next_hit_page(
+                    stage.run_id,
+                    stage.memory_hits,
+                    &mut after_id,
+                    &mut offset,
+                    stage.page_size,
+                )
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            let kept = self.keep_actionable(page, stage).await;
+            credentials.extend(extract_credentials(&kept));
+        }
+        Ok(credentials)
+    }
+
+    async fn probe_from_hits(
+        &self,
+        stage: &HitStage<'_>,
+        events: &mpsc::UnboundedSender<ScanEvent>,
+    ) -> Result<Vec<Credential>> {
+        let mut after_id = 0_i64;
+        let mut offset = 0_usize;
+        let mut credentials = Vec::new();
+        loop {
+            let page = self
+                .next_hit_page(
+                    stage.run_id,
+                    stage.memory_hits,
+                    &mut after_id,
+                    &mut offset,
+                    stage.page_size,
+                )
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            let kept = self.keep_actionable(page, stage).await;
+            credentials.extend(self.probe_hits(&kept, events).await);
+            for hit in &kept {
+                let target = hit_target(hit);
+                if !target.is_empty() {
+                    stage.dedup.mark_host(target).await;
+                    stage.dedup.mark_target("probe", target).await;
+                }
+            }
+        }
+        Ok(credentials)
+    }
+
+    async fn gpt_from_hits(
+        &self,
+        analyzer: &crate::Analyzer,
+        stage: &HitStage<'_>,
+        run_dir: Option<&std::path::Path>,
+    ) -> Result<Vec<Credential>> {
+        let mut after_id = 0_i64;
+        let mut offset = 0_usize;
+        let mut credentials = Vec::new();
+        loop {
+            let page = self
+                .next_hit_page(
+                    stage.run_id,
+                    stage.memory_hits,
+                    &mut after_id,
+                    &mut offset,
+                    stage.page_size,
+                )
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            let kept = self.keep_actionable(page, stage).await;
+            credentials.extend(analyzer.extract(&kept, run_dir).await.credentials);
+        }
+        Ok(credentials)
+    }
+
+    async fn keep_actionable(&self, page: Vec<Value>, stage: &HitStage<'_>) -> Vec<Value> {
+        let mut kept = Vec::with_capacity(page.len());
+        for hit in page {
+            if self.hit_is_actionable(&hit, stage).await {
+                kept.push(hit);
+            }
+        }
+        kept
+    }
+
+    async fn hit_is_actionable(&self, hit: &Value, stage: &HitStage<'_>) -> bool {
+        let target = hit_target(hit);
+        let group = aipocket_core::url_sanitize::honeypot_group_key(target).ok();
+        if group
+            .as_ref()
+            .is_some_and(|group| stage.honeypots.contains(group))
+        {
+            return false;
+        }
+        if !stage.policy.use_cross_run_dedup || target.is_empty() {
+            return true;
+        }
+        !stage.dedup.target_seen("probe", target).await
     }
 
     async fn probe_hits(
@@ -772,7 +973,7 @@ impl Scanner {
         credentials
     }
 
-    fn write_artifacts(
+    async fn write_artifacts(
         &self,
         run_id: &str,
         hits: &[Value],
@@ -785,9 +986,46 @@ impl Scanner {
 
         let directory = self.settings.results_path().join(run_id);
         std::fs::create_dir_all(&directory)?;
-        write_jsonl(&directory.join("raw_hits.jsonl"), hits)?;
+        if hits.is_empty() {
+            self.write_hits_jsonl_from_spill(run_id, &directory.join("raw_hits.jsonl"))
+                .await?;
+        } else {
+            write_jsonl(&directory.join("raw_hits.jsonl"), hits)?;
+        }
         write_jsonl(&directory.join("valid.jsonl"), valid)?;
         write_jsonl(&directory.join("suspicious.jsonl"), suspicious)?;
+        Ok(())
+    }
+
+    async fn write_hits_jsonl_from_spill(
+        &self,
+        run_id: &str,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        use std::io::Write;
+        let Some(pool) = self.repository.pool() else {
+            write_jsonl(path, &[])?;
+            return Ok(());
+        };
+        let mut file = std::fs::File::create(path)?;
+        let mut after_id = 0_i64;
+        let limit = self.settings.prober_batch_size.max(1) as i64;
+        let mut wrote = false;
+        loop {
+            let page = aipocket_db::load_discovery_hit_page(pool, run_id, after_id, limit).await?;
+            if page.is_empty() {
+                break;
+            }
+            after_id = page.last().map(|(id, _)| *id).unwrap_or(after_id);
+            for (_, hit) in page {
+                serde_json::to_writer(&mut file, &hit)?;
+                file.write_all(b"\n")?;
+                wrote = true;
+            }
+        }
+        if !wrote {
+            write_jsonl(path, &[])?;
+        }
         Ok(())
     }
 
@@ -955,6 +1193,7 @@ fn source_query_budget(source: &str, budgets: &SourceBudgets, query_count: usize
     }
     .unwrap_or(query_count)
 }
+#[cfg(test)]
 fn distinct_target_count(hits: &[Value]) -> u64 {
     let mut targets = std::collections::HashSet::new();
     for hit in hits {
@@ -1027,20 +1266,11 @@ fn apply_balance(result: &mut aipocket_core::ValidationResult, enriched: crate::
     crate::balance::apply_probe_result(result, enriched);
 }
 
-fn phase_rank(phase: &str) -> usize {
-    [
-        "started",
-        "discovery",
-        "extract",
-        "probe",
-        "gpt",
-        "validate",
-        "finalize",
-        "finished",
-    ]
-    .iter()
-    .position(|value| *value == phase)
-    .unwrap_or(0)
+fn hit_target(hit: &Value) -> &str {
+    hit.get("host")
+        .or_else(|| hit.get("url"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 fn credentials_from_observations(
@@ -1438,8 +1668,9 @@ mod tests {
     fn scanner_helpers_preserve_artifacts_phases_and_observations() {
         assert_eq!(mode_name(&ScanMode::Full), "full");
         assert_eq!(mode_name(&ScanMode::Incremental), "incremental");
-        assert!(phase_rank("finished") > phase_rank("validate"));
-        assert!(phase_rank("extract") < phase_rank("validate"));
+        assert!(PipelinePhase::Finished.rank() > PipelinePhase::Validate.rank());
+        assert!(PipelinePhase::Extract < PipelinePhase::Validate);
+        assert_eq!(PipelinePhase::parse("unknown"), None);
         assert_eq!(
             distinct_target_count(&[
                 json!({"host":"https://a.example"}),
@@ -1448,7 +1679,6 @@ mod tests {
             ]),
             2
         );
-        assert_eq!(phase_rank("unknown"), 0);
         assert!(!github_shard_id("code_snapshot", "openai", "q").is_empty());
 
         let mut result = aipocket_core::ValidationResult::default();
@@ -1639,6 +1869,14 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, ScanEvent::Phase(phase) if phase == "discovery"))
         );
+        for phase in ["extract", "probe", "gpt", "validate", "finalize"] {
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, ScanEvent::Phase(name) if name == phase)),
+                "missing phase {phase}"
+            );
+        }
         assert!(events.iter().any(
             |event| matches!(event, ScanEvent::Log(message) if message.contains("发现 · 进度 · fofa · 查询 1/3 · 第 1 页"))
         ));
@@ -1798,6 +2036,7 @@ mod tests {
         let scanner = Scanner::new(Arc::new(settings), Repository::new(None), test_http());
         scanner
             .write_artifacts("run_x", &[json!({"a":1})], &[], &[])
+            .await
             .unwrap();
         assert!(!root.join("run_x").exists());
 
@@ -2078,13 +2317,13 @@ mod tests {
                 .any(|event| matches!(event, ScanEvent::Finished { run_id: id } if id == finished))
         );
 
-        // Cancel once extract_validate starts so the first validation chunk aborts.
+        // Cancel once validate starts so the first validation chunk aborts.
         let cancel = CancellationToken::new();
         let watcher = cancel.clone();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let watch = tokio::spawn(async move {
             while let Some(event) = rx.recv().await {
-                if matches!(event, ScanEvent::Phase(ref phase) if phase == "extract_validate") {
+                if matches!(event, ScanEvent::Phase(ref phase) if phase == "validate") {
                     watcher.cancel();
                     break;
                 }

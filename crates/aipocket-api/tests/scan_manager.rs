@@ -22,6 +22,9 @@ async fn manager_enforces_single_scan_and_replays_logs() {
     })
     .unwrap();
     tx.send(ScanEvent::Phase("discovery".into())).unwrap();
+    tx.send(ScanEvent::Phase("extract".into())).unwrap();
+    tx.send(ScanEvent::Phase("validate".into())).unwrap();
+    tx.send(ScanEvent::Phase("finalize".into())).unwrap();
     tx.send(ScanEvent::Progress(ScanProgress {
         raw_hits: 3,
         ..Default::default()
@@ -47,6 +50,9 @@ async fn manager_enforces_single_scan_and_replays_logs() {
     let transcript = manager.log_text().await;
     assert!(transcript.contains("扫描请求已接受 · 数据源 manual · 模式 增量"));
     assert!(transcript.contains("阶段 · 发现"));
+    assert!(transcript.contains("阶段 · 提取"));
+    assert!(transcript.contains("阶段 · 验证"));
+    assert!(transcript.contains("阶段 · 余额与落库"));
     assert!(transcript.contains("进度 · 原始命中 3"));
     assert!(transcript.contains("扫描完成 · run_2026_07_24_00-00-00"));
 }

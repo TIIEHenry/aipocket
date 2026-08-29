@@ -156,13 +156,47 @@ pub fn sanitize_json_for_pg(value: &Value) -> Value {
     }
 }
 
-pub async fn load_discovery_hits(pool: &PgPool, run_id: &str) -> anyhow::Result<Vec<Value>> {
-    Ok(
-        sqlx::query_scalar("SELECT record FROM scan_discovery_hits WHERE run_id=$1 ORDER BY id")
-            .bind(run_id)
-            .fetch_all(pool)
-            .await?,
+pub async fn load_discovery_hit_page(
+    pool: &PgPool,
+    run_id: &str,
+    after_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<(i64, Value)>> {
+    let rows = sqlx::query(
+        "SELECT id,record FROM scan_discovery_hits WHERE run_id=$1 AND id>$2 ORDER BY id LIMIT $3",
     )
+    .bind(run_id)
+    .bind(after_id)
+    .bind(limit.max(1))
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| Ok((row.try_get("id")?, row.try_get("record")?)))
+        .collect()
+}
+
+pub async fn load_discovery_hits(pool: &PgPool, run_id: &str) -> anyhow::Result<Vec<Value>> {
+    Ok(load_discovery_hit_page(pool, run_id, 0, i64::MAX)
+        .await?
+        .into_iter()
+        .map(|(_, record)| record)
+        .collect())
+}
+
+pub async fn count_discovery_hits(pool: &PgPool, run_id: &str) -> anyhow::Result<u64> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scan_discovery_hits WHERE run_id=$1")
+        .bind(run_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count.max(0) as u64)
+}
+
+pub async fn count_candidates(pool: &PgPool, run_id: &str) -> anyhow::Result<u64> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scan_candidates WHERE run_id=$1")
+        .bind(run_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count.max(0) as u64)
 }
 
 pub async fn load_validation_results(

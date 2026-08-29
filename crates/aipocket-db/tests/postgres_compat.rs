@@ -290,8 +290,9 @@ async fn query_metrics_and_run_ledger_state_replace_atomically() {
 async fn spill_tables_round_trip_candidates_hits_and_validation_results() {
     use aipocket_core::{Credential, ValidationResult};
     use aipocket_db::{
-        load_candidate_page, load_discovery_hits, load_validation_results, upsert_candidates,
-        upsert_discovery_hits, upsert_validation_results,
+        count_candidates, count_discovery_hits, load_candidate_page, load_discovery_hit_page,
+        load_discovery_hits, load_validation_results, upsert_candidates, upsert_discovery_hits,
+        upsert_validation_results,
     };
 
     let pool = connect_pg(&settings()).await.unwrap().unwrap();
@@ -330,6 +331,15 @@ async fn spill_tables_round_trip_candidates_hits_and_validation_results() {
         2
     );
     assert_eq!(load_discovery_hits(&pool, &run_id).await.unwrap().len(), 2);
+    assert_eq!(count_discovery_hits(&pool, &run_id).await.unwrap(), 2);
+    assert_eq!(count_candidates(&pool, &run_id).await.unwrap(), 1);
+    let first_page = load_discovery_hit_page(&pool, &run_id, 0, 1).await.unwrap();
+    assert_eq!(first_page.len(), 1);
+    let second_page = load_discovery_hit_page(&pool, &run_id, first_page[0].0, 10)
+        .await
+        .unwrap();
+    assert_eq!(second_page.len(), 1);
+    assert_ne!(first_page[0].0, second_page[0].0);
 
     let validation = ValidationResult {
         credential,

@@ -209,10 +209,16 @@ fn mode_label(mode: &ScanMode) -> &'static str {
 
 fn phase_label(phase: &str) -> &str {
     match phase {
+        "started" => "开始",
         "discovery" => "发现",
+        "extract" => "提取",
+        "probe" => "探测",
+        "gpt" => "GPT 提取",
+        "validate" => "验证",
+        "finalize" => "余额与落库",
+        "finished" => "完成",
         "extract_validate" => "提取与验证",
         "balance_finalize" => "余额探测与结果落库",
-        "finished" => "完成",
         other => other,
     }
 }
