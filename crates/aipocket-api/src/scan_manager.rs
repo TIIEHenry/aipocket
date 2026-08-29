@@ -38,6 +38,16 @@ impl ScanManager {
         status.github_pack_ids = github_pack_ids;
         status.manual_enrich = manual_enrich;
     }
+    pub async fn set_skipped(&self, skipped: Vec<aipocket_core::SkippedSource>) {
+        if skipped.is_empty() {
+            return;
+        }
+        for item in &skipped {
+            self.push_log(format!("跳过数据源 · {} · {}", item.source, item.reason))
+                .await;
+        }
+        self.status.write().await.skipped_sources = skipped;
+    }
     pub async fn start_channel(
         &self,
         source: String,

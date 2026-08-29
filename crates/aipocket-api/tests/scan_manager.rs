@@ -80,3 +80,18 @@ async fn stop_waits_until_the_scan_task_exits() {
     consumer.await.unwrap();
     assert_eq!(manager.status().await.state, ScanState::Interrupted);
 }
+
+#[tokio::test]
+async fn set_skipped_records_status_and_logs() {
+    let manager = std::sync::Arc::new(ScanManager::new(64));
+    manager
+        .set_skipped(vec![aipocket_core::SkippedSource {
+            source: "github".into(),
+            reason: "missing GITHUB_TOKENS".into(),
+        }])
+        .await;
+    let status = manager.status().await;
+    assert_eq!(status.skipped_sources.len(), 1);
+    assert_eq!(status.skipped_sources[0].source, "github");
+    assert!(manager.log_text().await.contains("github"));
+}
