@@ -98,6 +98,13 @@ pub enum ScanState {
     Interrupted,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkippedSource {
+    pub source: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScanStatus {
@@ -113,6 +120,7 @@ pub struct ScanStatus {
     pub phase: String,
     pub error: Option<String>,
     pub log_seq: u64,
+    pub skipped_sources: Vec<SkippedSource>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,5 +199,19 @@ mod tests {
         let value = serde_json::to_value(ScanProgress::default()).unwrap();
         assert!(value.get("valid").is_none());
         assert_eq!(value.as_object().unwrap().len(), 7);
+    }
+
+    #[test]
+    fn scan_status_defaults_skipped_sources_empty() {
+        let status = ScanStatus::default();
+        assert!(status.skipped_sources.is_empty());
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["skipped_sources"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn scan_status_deserializes_without_skipped_sources() {
+        let status: ScanStatus = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(status.skipped_sources.is_empty());
     }
 }
