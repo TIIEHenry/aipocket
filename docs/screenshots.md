@@ -1,3 +1,11 @@
+---
+title: "界面截图"
+type: guide
+status: current
+updated: 2026-08-18
+summary: "Web UI 主要页面截图；页面说明见 guides/web-ui.md"
+---
+
 # AIPocket 界面截图
 
 [返回项目 README](../README.md)

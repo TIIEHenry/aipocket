@@ -72,3 +72,14 @@ preview/*.js
 
 # Design files
 *.pen
+
+# Instance-specific operator notes and credentials (never commit)
+docs/local/
+docs/local-deploy.md
+.deploy-credentials.txt
+
+# Runtime logs / pids from local start scripts
+logs/
+
+# Local agent tooling cache
+.opencode/

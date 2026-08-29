@@ -1,32 +1,29 @@
-# React + TypeScript + Vite
+---
+title: "frontend"
+type: concept
+status: current
+updated: 2026-08-18
+summary: "React 19 + Vite + Tailwind v4 + shadcn/ui；后端调用只走 lib/api.ts"
+---
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+# frontend
 
-Currently, two official plugins are available:
+开发：`pnpm install && pnpm dev`。Vite 把 `/api` 代理到 `http://localhost:8000`（`dev` 与 `preview` 都配了）。后端需另开 `aipocket serve`。生产：`pnpm build`，由 Nginx 或 `WEB_STATIC_DIR` 托管。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 约定
 
-## React Compiler
+- 页面：`src/pages/`，路由：`src/App.tsx`，侧栏：`src/lib/navigation.ts`
+- 服务端状态：`@tanstack/react-query`
+- 组件：`src/components/ui/`（shadcn），不要另装组件库
+- 后端：`src/lib/api.ts`
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+pnpm lint
+pnpm test -- --run
+pnpm build
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## 相关文档
+
+- [Web UI](../docs/guides/web-ui.md)
+- [前端约定](../docs/guides/frontend.md)
