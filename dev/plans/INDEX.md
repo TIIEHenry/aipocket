@@ -13,3 +13,4 @@ summary: "dev/plans 导航"
 | 方案 | 状态 | 决策 |
 |------|------|------|
 | [pipeline-phase-spill](pipeline-phase-spill.md) | implemented | [ADR-002](../decisions/002-pipeline-phase-spill.md) |
+| [scan-assembly-and-routes-split](scan-assembly-and-routes-split.md) | draft | [ADR-003](../decisions/003-scan-assembly-in-services.md) |
