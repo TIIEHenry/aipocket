@@ -9,7 +9,10 @@ use std::sync::Arc;
 use aipocket_core::{Credential, ScanMode};
 
 pub mod packs;
+pub mod queries;
 pub mod sources;
+
+pub use queries::{ComposedQueries, compose_queries};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ArtifactProvenance {
