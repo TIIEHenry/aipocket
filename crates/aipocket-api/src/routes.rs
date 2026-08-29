@@ -67,6 +67,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/settings/check/fofa", post(check_fofa))
         .route("/api/settings/check/shodan", post(check_shodan))
         .route("/api/settings/check/github", post(check_github))
+        .route("/api/settings/check/tavily", post(check_tavily))
         .route("/api/scan/start", post(scan_start))
         .route("/api/scan/stop", post(scan_stop))
         .route("/api/scan/status", get(scan_status))
@@ -521,7 +522,7 @@ struct BalanceRequest {
     high_value: bool,
 }
 fn definitive_expiry(probe: &aipocket_services::BalanceResult) -> Option<u16> {
-    if probe.alive != Some(false) || probe.provider != "deepseek" {
+    if probe.alive != Some(false) || !matches!(probe.provider.as_str(), "deepseek" | "cursor") {
         return None;
     }
     probe
@@ -1287,6 +1288,12 @@ async fn check_github(_: Auth, State(s): State<AppState>) -> Json<Value> {
         }
     }
 }
+async fn check_tavily(_: Auth, State(s): State<AppState>) -> Json<Value> {
+    match s.tavily().await.check().await {
+        Ok(_) => Json(json!({"status":"ok","message":"reachable","consumes_quota":true})),
+        Err(e) => Json(json!({"status":"invalid","message":e.to_string(),"consumes_quota":true})),
+    }
+}
 #[derive(Deserialize)]
 struct ScanStart {
     #[serde(default = "all_source")]
@@ -1321,10 +1328,8 @@ fn discovery_queries(
         .map(|query| query.to_string())
         .collect::<Vec<_>>();
     shodan.extend(aipocket_discovery::legacy_queries::shodan_product_queries());
-    fofa.sort();
-    fofa.dedup();
-    shodan.sort();
-    shodan.dedup();
+    aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut fofa);
+    aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut shodan);
     (fofa, shodan)
 }
 
@@ -1333,7 +1338,7 @@ mod key_probe_tests {
     use super::*;
 
     #[test]
-    fn only_definitive_deepseek_auth_rejection_expires_a_key() {
+    fn only_definitive_provider_auth_rejection_expires_a_key() {
         let probe = |provider: &str, status_code: u16, alive| aipocket_services::BalanceResult {
             provider: provider.into(),
             alive,
@@ -1349,11 +1354,20 @@ mod key_probe_tests {
             Some(403)
         );
         assert_eq!(
+            definitive_expiry(&probe("cursor", 401, Some(false))),
+            Some(401)
+        );
+        assert_eq!(
+            definitive_expiry(&probe("cursor", 403, Some(false))),
+            Some(403)
+        );
+        assert_eq!(
             definitive_expiry(&probe("deepseek", 429, Some(false))),
             None
         );
         assert_eq!(definitive_expiry(&probe("deepseek", 401, Some(true))), None);
         assert_eq!(definitive_expiry(&probe("openai", 401, Some(false))), None);
+        assert_eq!(definitive_expiry(&probe("cursor", 401, Some(true))), None);
     }
 }
 
@@ -1369,6 +1383,20 @@ mod scan_query_tests {
         assert!(fofa.len() > 60);
         assert!(fofa.iter().any(|query| query.contains("litellm_proxy")));
         assert!(fofa.iter().any(|query| query.contains("dify")));
+        assert!(
+            fofa.iter()
+                .any(|query| query.contains("api.deepseek.com") && query.contains("sk-"))
+        );
+        assert!(
+            fofa.iter()
+                .any(|query| query.contains("api.cursor.com") && query.contains("crsr_"))
+        );
+        assert!(fofa.iter().any(|query| query.contains("sub2api")));
+        assert!(fofa.iter().any(|query| query.contains("CLIProxyAPI")));
+        assert!(
+            fofa.first()
+                .is_some_and(|query| query.starts_with("header="))
+        );
         assert!(shodan.iter().any(|query| query == "http.html:sk-"));
         assert!(shodan.iter().any(|query| query.contains("litellm_proxy")));
     }
@@ -1481,11 +1509,15 @@ async fn scan_start(
             discovery.push(std::sync::Arc::new(
                 aipocket_discovery::sources::GithubSource {
                     client: aipocket_clients::GithubClient::new(http.clone(), &settings),
-                    queries: selected_packs
-                        .iter()
-                        .flat_map(|p| p.github_terms)
-                        .map(|v| v.to_string())
-                        .collect(),
+                    queries: {
+                        let mut queries = selected_packs
+                            .iter()
+                            .flat_map(|p| p.github_terms)
+                            .map(|v| v.to_string())
+                            .collect();
+                        aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut queries);
+                        queries
+                    },
                     per_page: settings.github_search_page_size,
                     run_id: b.resume_run_id.clone(),
                     pack_id: if b.github_pack_ids.len() == 1 {

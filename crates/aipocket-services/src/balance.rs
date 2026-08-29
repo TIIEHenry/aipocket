@@ -104,7 +104,11 @@ impl BalanceService {
         } else {
             &credential.host
         };
-        let resolution = self.registry.resolve(provider_hint, &credential.apikey);
+        let resolution = self.registry.resolve_with_product(
+            provider_hint,
+            &credential.apikey,
+            &credential.product,
+        );
         let contextual_provider = context
             .map(|result| result.provider_info.validation_provider.as_str())
             .filter(|provider| !matches!(*provider, "" | "unknown" | "ambiguous"));
@@ -149,7 +153,9 @@ impl BalanceService {
             "cursor" => self.cursor(credential).await,
             "windsurf" => self.windsurf(credential).await,
             "aws_bedrock" => self.models_liveness(credential, provider, "N/A").await,
-            "kiro" | "azure_openai" | "vertex" => Ok(context
+            "fofa" => self.fofa(credential).await,
+            "shodan" => self.shodan(credential).await,
+            "kiro" | "azure_openai" | "vertex" | "volcengine_ark" => Ok(context
                 .map(|result| validated_liveness(result, provider))
                 .unwrap_or_default()),
             "unknown" | "gateway" | "ambiguous" => {
@@ -891,6 +897,17 @@ impl BalanceService {
                 &[],
             )
             .await?;
+        if matches!(status, 401 | 403) {
+            let mut result = probe_result(
+                "cursor",
+                "cursor:unauthorized",
+                "liveness",
+                "",
+                json!({"status_code":status,"response":payload}),
+            );
+            result.alive = Some(false);
+            return Ok(result);
+        }
         if status != 200 || !payload.is_object() {
             return Ok(Default::default());
         }
@@ -942,6 +959,120 @@ impl BalanceService {
             "add_on_credits_available":available,
             "add_on_credits_used":used,
         });
+        result.alive = Some(true);
+        Ok(result)
+    }
+
+    async fn fofa(&self, credential: &Credential) -> Result<BalanceResult> {
+        if !header_safe(&credential.apikey) {
+            return Ok(Default::default());
+        }
+        let url = self.endpoint("https://fofoapi.com/api/v1/info/my");
+        let response = self
+            .http
+            .get(&url)
+            .query(&[("key", credential.apikey.as_str())])
+            .send()
+            .await?;
+        let status = response.status().as_u16();
+        let payload: Value = response.json().await.unwrap_or(Value::Null);
+        let errmsg = payload
+            .get("errmsg")
+            .or_else(|| payload.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if errmsg.contains("key") || errmsg.contains("账号") {
+            let mut result = probe_result(
+                "fofa",
+                "fofa:unauthorized",
+                "liveness",
+                "",
+                json!({"status_code":status,"errmsg":payload.get("errmsg")}),
+            );
+            result.alive = Some(false);
+            return Ok(result);
+        }
+        if aipocket_core::fofa_info_valid(&payload) {
+            let fcoin = payload.get("fcoin");
+            let mut result = probe_result(
+                "fofa",
+                "fofa:info",
+                "quota",
+                "N/A",
+                json!({"status_code":status,"email":payload.get("email"),"fcoin":fcoin}),
+            );
+            result.quota = json!({"fcoin":fcoin,"isvip":payload.get("isvip"),"vip_level":payload.get("vip_level")});
+            if let Some(coins) = aipocket_core::json_number(fcoin) {
+                result.balance_native = if coins.fract() == 0.0 {
+                    format!("{}", coins as i64)
+                } else {
+                    coins.to_string()
+                };
+                result.currency = "fcoin".into();
+            }
+            result.alive = Some(true);
+            return Ok(result);
+        }
+        if status == 401 || status == 403 {
+            let mut result = probe_result(
+                "fofa",
+                "fofa:unauthorized",
+                "liveness",
+                "",
+                json!({"status_code":status}),
+            );
+            result.alive = Some(false);
+            return Ok(result);
+        }
+        Ok(Default::default())
+    }
+
+    async fn shodan(&self, credential: &Credential) -> Result<BalanceResult> {
+        if !header_safe(&credential.apikey) {
+            return Ok(Default::default());
+        }
+        let url = self.endpoint("https://api.shodan.io/api-info");
+        let response = self
+            .http
+            .get(&url)
+            .query(&[("key", credential.apikey.as_str())])
+            .send()
+            .await?;
+        let status = response.status().as_u16();
+        let payload: Value = response.json().await.unwrap_or(Value::Null);
+        if status != 200 {
+            if status == 401 || status == 403 {
+                let mut result = probe_result(
+                    "shodan",
+                    "shodan:unauthorized",
+                    "liveness",
+                    "",
+                    json!({"status_code":status}),
+                );
+                result.alive = Some(false);
+                return Ok(result);
+            }
+            return Ok(Default::default());
+        }
+        let plan = payload
+            .get("plan")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let query_credits = payload.get("query_credits").and_then(|v| v.as_i64());
+        if plan.is_empty() && query_credits.is_none() {
+            return Ok(Default::default());
+        }
+        let mut result = probe_result(
+            "shodan",
+            "shodan:api_info",
+            "quota",
+            "N/A",
+            json!({"plan":plan,"query_credits":query_credits,"scan_credits":payload.get("scan_credits")}),
+        );
+        result.quota =
+            json!({"query_credits":query_credits,"scan_credits":payload.get("scan_credits")});
+        result.plan = plan.into();
         result.alive = Some(true);
         Ok(result)
     }
@@ -2442,6 +2573,7 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let service = BalanceService::new(
             reqwest::Client::builder()
+                .no_proxy()
                 .resolve("api.deepseek.com", address)
                 .build()
                 .unwrap(),
@@ -2465,6 +2597,92 @@ mod tests {
         assert!(balance.matched);
         assert_eq!(balance.source, "deepseek:unauthorized");
         assert_eq!(balance.alive, Some(false));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn cursor_auth_rejection_is_typed_as_expired_and_dead() {
+        use axum::{Json, Router, http::StatusCode, routing::get};
+
+        async fn fixture() -> (StatusCode, Json<Value>) {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error":{"message":"Invalid API key"}})),
+            )
+        }
+
+        let app = Router::new().route("/v1/me", get(fixture));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let service = BalanceService::new(reqwest::Client::new())
+            .with_official_base(format!("http://{}", address));
+        let balance = service
+            .query(&Credential {
+                apikey: "crsr_abcdefghijklmnopqrstuvwxyz123456".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(balance.matched);
+        assert_eq!(balance.source, "cursor:unauthorized");
+        assert_eq!(balance.alive, Some(false));
+        assert_eq!(balance.detail["status_code"], 401);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn fofa_info_my_reports_quota_and_expired_keys() {
+        use axum::{Json, Router, extract::Query, http::StatusCode, routing::get};
+        use std::collections::HashMap;
+
+        async fn fixture(
+            Query(query): Query<HashMap<String, String>>,
+        ) -> (StatusCode, Json<Value>) {
+            if query.get("key").map(String::as_str) == Some("bad") {
+                return (
+                    StatusCode::OK,
+                    Json(json!({"error":true,"errmsg":"[-700] 账号无效"})),
+                );
+            }
+            (
+                StatusCode::OK,
+                Json(
+                    json!({"error":false,"email":"a@b.c","username":"lab","fcoin":42,"isvip":true}),
+                ),
+            )
+        }
+
+        let app = Router::new().route("/api/v1/info/my", get(fixture));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let service = BalanceService::new(reqwest::Client::new())
+            .with_official_base(format!("http://{}", address));
+        let live = service
+            .query(&Credential {
+                apikey: "ooigvvhdstmbnjd6zxiijxj8ij9exdd8".into(),
+                product: "fofa".into(),
+                apiurl: "https://fofoapi.com".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(live.matched);
+        assert_eq!(live.source, "fofa:info");
+        assert_eq!(live.alive, Some(true));
+        assert_eq!(live.balance_native, "42");
+        let dead = service
+            .query(&Credential {
+                apikey: "bad".into(),
+                product: "fofa".into(),
+                apiurl: "https://fofoapi.com".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(dead.source, "fofa:unauthorized");
+        assert_eq!(dead.alive, Some(false));
         server.abort();
     }
 
@@ -2769,7 +2987,7 @@ mod tests {
         assert_eq!(entitlement.evidence_kind, "entitlement");
         assert_eq!(entitlement.entitlements, json!({"models":["deepseek-v3"]}));
 
-        for provider in ["azure_openai", "vertex"] {
+        for provider in ["azure_openai", "vertex", "volcengine_ark"] {
             let result = service
                 .query_for_result(&aipocket_core::ValidationResult {
                     valid: true,

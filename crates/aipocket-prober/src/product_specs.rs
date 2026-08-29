@@ -106,6 +106,24 @@ const SURFACES: &[ProductSurface] = &[
         rce: Some(("/api/system/test", "cmd")),
     },
     ProductSurface {
+        product: "sub2api_panel",
+        unauth: &["/v1/models", "/api/v1/models"],
+        login: None,
+        idor: None,
+        ssrf: None,
+        sqli: None,
+        rce: None,
+    },
+    ProductSurface {
+        product: "cliproxyapi",
+        unauth: &["/v1/models"],
+        login: None,
+        idor: None,
+        ssrf: None,
+        sqli: None,
+        rce: None,
+    },
+    ProductSurface {
         product: "openrouter",
         unauth: &["/api/v1/models"],
         login: Some("/api/auth/login"),
@@ -256,6 +274,16 @@ mod tests {
     #[test]
     fn every_product_has_l0_l2_l3_specs() {
         for surface in SURFACES {
+            // sub2api_panel / cliproxyapi are lightweight gateways – L0 only by design
+            if matches!(surface.product, "sub2api_panel" | "cliproxyapi") {
+                let specs = specs_for(surface.product);
+                assert!(
+                    specs
+                        .iter()
+                        .any(|spec| spec.vuln_class == VulnClass::UnauthRead)
+                );
+                continue;
+            }
             let specs = specs_for(surface.product);
             assert!(
                 specs

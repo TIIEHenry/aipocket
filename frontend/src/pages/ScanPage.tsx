@@ -75,6 +75,9 @@ const GITHUB_PACK_OPTIONS: readonly { value: Exclude<GitHubPackId, "all">; label
   { value: "replicate", label: "Replicate" },
   { value: "together", label: "Together" },
   { value: "fireworks", label: "Fireworks" },
+  { value: "volcengine_ark", label: "火山方舟 Ark" },
+  { value: "fofa_leak", label: "FOFA 密钥" },
+  { value: "shodan_leak", label: "Shodan 密钥" },
 ]
 
 const ALL_PACK_IDS = GITHUB_PACK_OPTIONS.map((p) => p.value)
@@ -186,7 +189,12 @@ export function ScanConsole({
   })
   const [mode, setMode] = useState<ScanMode>("incremental")
   /** Multi-select provider packs. Empty + "all" shortcut both mean every pack. */
-  const [githubPacks, setGithubPacks] = useState<GitHubPackId[]>(["deepseek", "glm", "kimi"])
+  const [githubPacks, setGithubPacks] = useState<GitHubPackId[]>([
+    "deepseek",
+    "glm",
+    "kimi",
+    "cursor",
+  ])
   const [packDropdownOpen, setPackDropdownOpen] = useState(false)
   /** Custom hunt: reverse-lookup hostnames on FOFA/Shodan for product fingerprints. */
   const [manualEnrich, setManualEnrich] = useState<ManualEnrichEngine[]>(readManualEnrich)

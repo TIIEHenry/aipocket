@@ -20,6 +20,12 @@ passive_prober!(
 passive_prober!(FlowiseProber, "flowise", &["/api/v1/version"]);
 passive_prober!(LangflowProber, "langflow", &["/api/v1/version"]);
 passive_prober!(NewApiProber, "newapi", &["/api/status", "/v1/models"]);
+passive_prober!(
+    Sub2ApiPanelProber,
+    "sub2api_panel",
+    &["/v1/models", "/api/v1/models"]
+);
+passive_prober!(CliProxyApiProber, "cliproxyapi", &["/v1/models"]);
 passive_prober!(GenericProber, "generic", &["/v1/models", "/api/status"]);
 passive_prober!(
     AnythingLlmProber,
@@ -40,6 +46,8 @@ pub fn default_probers() -> Vec<Box<dyn Prober>> {
         Box::new(FlowiseProber),
         Box::new(LangflowProber),
         Box::new(NewApiProber),
+        Box::new(Sub2ApiPanelProber),
+        Box::new(CliProxyApiProber),
         Box::new(GenericProber),
         Box::new(AnythingLlmProber),
         Box::new(ChatGptNextWebProber),

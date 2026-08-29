@@ -38,6 +38,9 @@ export type ProviderName =
   | "aws_bedrock"
   | "cursor"
   | "windsurf"
+  | "volcengine_ark"
+  | "fofa"
+  | "shodan"
   | "newapi"
   | "oneapi"
   | "litellm"
@@ -73,6 +76,9 @@ const PROVIDER_BRAND: Record<ProviderName, { label: string; color: string }> = {
   aws_bedrock: { label: "AWS Bedrock", color: "#ff9900" },
   cursor: { label: "Cursor", color: "#0f172a" },
   windsurf: { label: "Windsurf", color: "#00bfa5" },
+  volcengine_ark: { label: "火山方舟 Ark", color: "#1664ff" },
+  fofa: { label: "FOFA", color: "#2563eb" },
+  shodan: { label: "Shodan", color: "#dc2626" },
   newapi: { label: "NewAPI", color: "#0ea5e9" },
   oneapi: { label: "OneAPI", color: "#06b6d4" },
   litellm: { label: "LiteLLM", color: "#6366f1" },

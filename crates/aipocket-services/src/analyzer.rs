@@ -743,6 +743,9 @@ fn provider_hint(name: &str, secret: &str) -> String {
         ("anthropic", "anthropic"),
         ("google", "google"),
         ("vertex", "vertex"),
+        ("volcengine", "volcengine_ark"),
+        ("ark_api_key", "volcengine_ark"),
+        ("doubao", "volcengine_ark"),
     ]
     .iter()
     .find_map(|(token, provider)| text.contains(token).then_some((*provider).to_owned()))
@@ -761,6 +764,8 @@ fn provider_hint(name: &str, secret: &str) -> String {
             "replicate".into()
         } else if secret.starts_with("AIza") {
             "gemini".into()
+        } else if secret.starts_with("ark-") {
+            "volcengine_ark".into()
         } else if secret.starts_with("sk-") {
             "openai".into()
         } else {
@@ -806,6 +811,7 @@ fn provider_default(provider: &str) -> Option<&'static str> {
         "nvidia" => "https://integrate.api.nvidia.com/v1",
         "ksyun" => "https://kspmas.ksyun.com/v1",
         "longcat" => "https://api.longcat.chat/openai",
+        "volcengine_ark" => "https://ark.cn-beijing.volces.com/api/v3",
         _ => return None,
     })
 }

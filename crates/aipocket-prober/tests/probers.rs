@@ -90,6 +90,7 @@ async fn coding_agent_and_bedrock_credentials_use_official_read_only_routes() {
     let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let validator = aipocket_prober::Validator::new(
         reqwest::Client::builder()
+            .no_proxy()
             .resolve("api.qoder.com", address)
             .resolve("api.cursor.com", address)
             .resolve("bedrock.us-east-1.amazonaws.com", address)

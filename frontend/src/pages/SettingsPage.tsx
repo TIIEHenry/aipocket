@@ -24,43 +24,60 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
-type FormState = Pick<
-  SettingsView,
-  | "fofa_keys"
-  | "fofa_base_url"
-  | "shodan_keys"
-  | "shodan_base_url"
-  | "github_tokens"
-  | "github_api_base_url"
->
+interface FormState {
+  fofa_keys: string
+  fofa_base_url: string
+  fofa_query_budget: number
+  fofa_max_pages: number
+  shodan_keys: string
+  shodan_base_url: string
+  shodan_query_budget: number
+  github_tokens: string
+  github_api_base_url: string
+  tavily_key: string
+  tavily_base_url: string
+}
 
-const FORM_FIELDS = [
+const STRING_FIELDS = [
   "fofa_keys",
   "fofa_base_url",
   "shodan_keys",
   "shodan_base_url",
   "github_tokens",
   "github_api_base_url",
+  "tavily_key",
+  "tavily_base_url",
 ] as const
-const SENSITIVE = new Set<keyof FormState>(["fofa_keys", "shodan_keys", "github_tokens"])
+const NUMBER_FIELDS = ["fofa_query_budget", "fofa_max_pages", "shodan_query_budget"] as const
+const SENSITIVE = new Set<keyof FormState>(["fofa_keys", "shodan_keys", "github_tokens", "tavily_key"])
 
 function pickForm(view: SettingsView): FormState {
   return {
-    fofa_keys: view.fofa_keys,
-    fofa_base_url: view.fofa_base_url,
-    shodan_keys: view.shodan_keys,
-    shodan_base_url: view.shodan_base_url,
-    github_tokens: view.github_tokens,
-    github_api_base_url: view.github_api_base_url,
+    fofa_keys: view.fofa_keys ?? "",
+    fofa_base_url: view.fofa_base_url ?? "",
+    fofa_query_budget: view.fofa_query_budget ?? 200,
+    fofa_max_pages: view.fofa_max_pages ?? 2,
+    shodan_keys: view.shodan_keys ?? "",
+    shodan_base_url: view.shodan_base_url ?? "",
+    shodan_query_budget: view.shodan_query_budget ?? 200,
+    github_tokens: view.github_tokens ?? "",
+    github_api_base_url: view.github_api_base_url ?? "",
+    tavily_key: view.tavily_key ?? "",
+    tavily_base_url: view.tavily_base_url ?? "",
   }
 }
 
 function buildUpdate(form: FormState, baseline: FormState): SettingsUpdate {
   const update: SettingsUpdate = {}
-  for (const field of FORM_FIELDS) {
+  for (const field of STRING_FIELDS) {
     const value = form[field]
     if (value === baseline[field]) continue
     if (SENSITIVE.has(field) && value.includes("****")) continue
+    update[field] = value
+  }
+  for (const field of NUMBER_FIELDS) {
+    const value = form[field]
+    if (value === baseline[field]) continue
     update[field] = value
   }
   return update
@@ -215,10 +232,17 @@ function SettingsForm({ initial }: Readonly<{ initial: SettingsView }>) {
   const update = buildUpdate(form, baseline)
   const isDirty = Object.keys(update).length > 0
 
-  const setField = (field: keyof FormState) => (event: React.ChangeEvent<HTMLInputElement>) => {
-    const value = event.target.value
-    setForm((prev) => ({ ...prev, [field]: value }))
-  }
+  const setField =
+    (field: (typeof STRING_FIELDS)[number]) => (event: React.ChangeEvent<HTMLInputElement>) => {
+      const value = event.target.value
+      setForm((prev) => ({ ...prev, [field]: value }))
+    }
+
+  const setNumberField =
+    (field: (typeof NUMBER_FIELDS)[number]) => (event: React.ChangeEvent<HTMLInputElement>) => {
+      const parsed = Number.parseInt(event.target.value, 10)
+      setForm((prev) => ({ ...prev, [field]: Number.isFinite(parsed) ? Math.max(1, parsed) : 1 }))
+    }
 
   const saveMutation = useMutation({
     mutationFn: () => api.updateSettings(update),
@@ -240,6 +264,7 @@ function SettingsForm({ initial }: Readonly<{ initial: SettingsView }>) {
   const fofaCheck = useMutation({ mutationFn: () => api.checkFofa() })
   const shodanCheck = useMutation({ mutationFn: () => api.checkShodan() })
   const githubCheck = useMutation({ mutationFn: () => api.checkGithub() })
+  const tavilyCheck = useMutation({ mutationFn: () => api.checkTavily() })
 
   const restartMutation = useMutation({
     mutationFn: () => api.systemRestart(),
@@ -309,6 +334,37 @@ function SettingsForm({ initial }: Readonly<{ initial: SettingsView }>) {
               />
             </Field>
 
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                label="FOFA_QUERY_BUDGET"
+                htmlFor="fofa-budget"
+                hint="增量模式最多跑多少条 FOFA 查询。full 不受此限制。日卡约 200 次 ≈ 条数×页数。"
+              >
+                <Input
+                  id="fofa-budget"
+                  type="number"
+                  min={1}
+                  value={form.fofa_query_budget}
+                  onChange={setNumberField("fofa_query_budget")}
+                  className="border-border-primary bg-surface-inset font-mono text-[13px] dark:bg-surface-inset"
+                />
+              </Field>
+              <Field
+                label="FOFA_MAX_PAGES"
+                htmlFor="fofa-pages"
+                hint="每条查询翻几页。每页算 1 次 API 调用。"
+              >
+                <Input
+                  id="fofa-pages"
+                  type="number"
+                  min={1}
+                  value={form.fofa_max_pages}
+                  onChange={setNumberField("fofa_max_pages")}
+                  className="border-border-primary bg-surface-inset font-mono text-[13px] dark:bg-surface-inset"
+                />
+              </Field>
+            </div>
+
             <div className="flex items-center gap-3">
               <Button
                 variant="outline"
@@ -353,6 +409,21 @@ function SettingsForm({ initial }: Readonly<{ initial: SettingsView }>) {
                 value={form.shodan_base_url}
                 onChange={setField("shodan_base_url")}
                 spellCheck={false}
+                className="border-border-primary bg-surface-inset font-mono text-[13px] dark:bg-surface-inset"
+              />
+            </Field>
+
+            <Field
+              label="SHODAN_QUERY_BUDGET"
+              htmlFor="shodan-budget"
+              hint="增量模式最多跑多少条 Shodan 查询。full 不受此限制。"
+            >
+              <Input
+                id="shodan-budget"
+                type="number"
+                min={1}
+                value={form.shodan_query_budget}
+                onChange={setNumberField("shodan_query_budget")}
                 className="border-border-primary bg-surface-inset font-mono text-[13px] dark:bg-surface-inset"
               />
             </Field>
@@ -429,6 +500,63 @@ function SettingsForm({ initial }: Readonly<{ initial: SettingsView }>) {
               isPending={githubCheck.isPending}
               data={githubCheck.data}
               error={githubCheck.error}
+            />
+          </section>
+
+          <section className="flex flex-col gap-4 rounded-md border border-border-primary bg-surface-raised p-4 sm:gap-[18px] sm:p-6">
+            <div className="flex items-center gap-2.5">
+              <span className="size-2.5 rounded-full bg-accent" />
+              <h2 className="text-base font-semibold text-text-primary">Tavily（CVE / 漏洞情报搜索）</h2>
+            </div>
+
+            <Field
+              label="TAVILY_KEY"
+              htmlFor="tavily-key"
+              hint="用于在 CVE 页面自动检索最新 AI 基础设施漏洞与情报"
+            >
+              <Input
+                id="tavily-key"
+                value={form.tavily_key}
+                onChange={setField("tavily_key")}
+                spellCheck={false}
+                placeholder="tvly-xxxxxxxxxxxxxxxxxxxx"
+                className="border-border-primary bg-surface-inset font-mono text-[13px] dark:bg-surface-inset"
+              />
+            </Field>
+
+            <Field
+              label="TAVILY_BASE_URL"
+              htmlFor="tavily-url"
+              hint="官方默认: https://api.tavily.com（支持自定义反代或镜像地址）"
+            >
+              <Input
+                id="tavily-url"
+                value={form.tavily_base_url}
+                onChange={setField("tavily_base_url")}
+                spellCheck={false}
+                placeholder="https://api.tavily.com"
+                className="border-border-primary bg-surface-inset font-mono text-[13px] dark:bg-surface-inset"
+              />
+            </Field>
+
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => tavilyCheck.mutate()}
+                disabled={tavilyCheck.isPending}
+                className="border-border-primary bg-surface-overlay text-text-secondary hover:text-text-primary dark:bg-surface-overlay"
+              >
+                <PlugZap />
+                检测可用性
+              </Button>
+              <span className="font-mono text-[11px] text-text-muted">测试一次情报搜索连通性</span>
+            </div>
+
+            <FofaResult
+              isPending={tavilyCheck.isPending}
+              data={tavilyCheck.data}
+              error={tavilyCheck.error}
             />
           </section>
         </div>

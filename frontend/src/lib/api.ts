@@ -31,6 +31,9 @@ export type GitHubPackId =
   | "azure_openai"
   | "minimax"
   | "longcat"
+  | "volcengine_ark"
+  | "fofa_leak"
+  | "shodan_leak"
 export type ExportFormat = "json" | "csv" | "sub2api"
 export type ExportDataset = "selected" | "run" | "high-value" | "all"
 export type ResultKind = "valid" | "suspicious" | "unavailable"
@@ -206,6 +209,10 @@ export interface SettingsView {
   github_tokens: string
   github_api_base_url: string
   github_hunter_enabled: boolean
+  tavily_key?: string
+  tavily_base_url?: string
+  fofa_query_budget: number
+  shodan_query_budget: number
   validate_concurrency: number
   prober_concurrency: number
 }
@@ -782,6 +789,7 @@ export const api = {
   checkFofa: () => request<FofaCheckResponse>("/settings/check/fofa", { method: "POST" }),
   checkShodan: () => request<ShodanCheckResponse>("/settings/check/shodan", { method: "POST" }),
   checkGithub: () => request<GithubCheckResponse>("/settings/check/github", { method: "POST" }),
+  checkTavily: () => request<FofaCheckResponse>("/settings/check/tavily", { method: "POST" }),
 
   // System
   systemRestart: () => request<{ restarting: boolean }>("/system/restart", { method: "POST" }),

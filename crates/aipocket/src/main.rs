@@ -135,6 +135,7 @@ async fn main() -> Result<()> {
 }
 fn http_client(settings: &Settings) -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
+        .user_agent("aipocket")
         .timeout(std::time::Duration::from_secs_f64(
             settings.validate_timeout,
         ))
@@ -243,13 +244,13 @@ async fn run_scan(
             .flat_map(|p| p.fofa_queries)
             .map(|q| q.to_string()),
     );
-    fofa_queries.sort();
-    fofa_queries.dedup();
-    let shodan_queries = registry
+    aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut fofa_queries);
+    let mut shodan_queries = registry
         .values()
         .flat_map(|p| p.shodan_queries)
         .map(|q| q.to_string())
         .collect();
+    aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut shodan_queries);
     if source == "all" || source == "fofa" {
         sources.push(Arc::new(aipocket_discovery::sources::FofaSource {
             client: aipocket_clients::FofaClient::new(http.clone(), &settings),
@@ -273,11 +274,15 @@ async fn run_scan(
     {
         sources.push(Arc::new(aipocket_discovery::sources::GithubSource {
             client: aipocket_clients::GithubClient::new(http.clone(), &settings),
-            queries: registry
-                .values()
-                .flat_map(|p| p.github_terms)
-                .map(|q| q.to_string())
-                .collect(),
+            queries: {
+                let mut queries = registry
+                    .values()
+                    .flat_map(|p| p.github_terms)
+                    .map(|q| q.to_string())
+                    .collect();
+                aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut queries);
+                queries
+            },
             per_page: settings.github_search_page_size,
             run_id: resume.clone().unwrap_or_default(),
             pack_id: String::new(),

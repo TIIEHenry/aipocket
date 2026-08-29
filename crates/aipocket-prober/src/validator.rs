@@ -15,9 +15,11 @@ impl Validator {
         }
     }
     pub async fn validate(&self, credential: Credential) -> Result<ValidationResult> {
-        let resolution = self
-            .registry
-            .resolve(&credential.apiurl, &credential.apikey);
+        let resolution = self.registry.resolve_with_product(
+            &credential.apiurl,
+            &credential.apikey,
+            &credential.product,
+        );
         let base = if credential.apiurl.is_empty() {
             resolution.spec.official_api_url
         } else {
@@ -241,6 +243,7 @@ mod tests {
         let base = format!("http://127.0.0.1:{}", address.port());
         let validator = Validator::new(
             reqwest::Client::builder()
+                .no_proxy()
                 .resolve("api.anthropic.com", address)
                 .resolve("generativelanguage.googleapis.com", address)
                 .resolve("bedrock.us-east-1.amazonaws.com", address)
@@ -319,6 +322,48 @@ mod tests {
             assert_eq!(invalid.error, "invalid-response-schema");
         }
 
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn fofa_product_validates_official_info_my() {
+        use axum::extract::Query;
+        async fn info(Query(query): Query<HashMap<String, String>>) -> impl IntoResponse {
+            if query.get("key").is_some_and(|key| key.len() == 32) {
+                Json(json!({"error":false,"email":"a@b.c","username":"lab","fcoin":12}))
+                    .into_response()
+            } else {
+                (
+                    StatusCode::OK,
+                    Json(json!({"error":true,"errmsg":"[-4] 参数错误"})),
+                )
+                    .into_response()
+            }
+        }
+        let app = Router::new().route("/api/v1/info/my", get(info));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let validator = Validator::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .resolve("fofoapi.com", address)
+                .build()
+                .unwrap(),
+        );
+        let result = validator
+            .validate(Credential {
+                apikey: "ooigvvhdstmbnjd6zxiijxj8ij9exdd8".into(),
+                apiurl: format!("http://fofoapi.com:{}", address.port()),
+                product: "fofa".into(),
+                backend: "github".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(result.valid, "{}", result.error);
+        assert_eq!(result.provider_info.provider, "fofa");
+        assert_eq!(result.status_code, Some(200));
         server.abort();
     }
 }

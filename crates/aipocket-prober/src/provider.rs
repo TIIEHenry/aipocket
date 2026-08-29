@@ -1,3 +1,4 @@
+use aipocket_core::recon_keys::recon_product;
 use std::collections::HashMap;
 use url::Url;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,11 +267,44 @@ static SPECS: &[ProviderSpec] = &[
         models: &[],
         official_api_url: "",
     },
+    ProviderSpec {
+        name: "volcengine_ark",
+        category: "domestic",
+        domain_suffixes: &[],
+        key_prefixes: &["ark-"],
+        protocol: ProtocolFamily::OpenAiCompatible,
+        models: &["doubao-seed-1-6-flash", "ark-code-latest"],
+        official_api_url: "https://ark.cn-beijing.volces.com/api/v3",
+    },
+    ProviderSpec {
+        name: "fofa",
+        category: "recon",
+        domain_suffixes: &["fofa.info", "fofoapi.com"],
+        key_prefixes: &[],
+        protocol: ProtocolFamily::OpenAiCompatible,
+        models: &[],
+        official_api_url: "https://fofoapi.com",
+    },
+    ProviderSpec {
+        name: "shodan",
+        category: "recon",
+        domain_suffixes: &["shodan.io", "api.shodan.io"],
+        key_prefixes: &[],
+        protocol: ProtocolFamily::OpenAiCompatible,
+        models: &[],
+        official_api_url: "https://api.shodan.io",
+    },
 ];
+fn is_ark_host(host: &str) -> bool {
+    host.starts_with("ark.") && (host.ends_with(".volces.com") || host.ends_with(".bytepluses.com"))
+}
 fn domain_matches(spec: &ProviderSpec, host: &str) -> bool {
     if spec.name == "aws_bedrock" {
         return host.ends_with(".amazonaws.com")
             && (host.starts_with("bedrock.") || host.starts_with("bedrock-"));
+    }
+    if spec.name == "volcengine_ark" {
+        return is_ark_host(host);
     }
     spec.domain_suffixes
         .iter()
@@ -281,6 +315,23 @@ fn domain_matches(spec: &ProviderSpec, host: &str) -> bool {
 pub struct ProviderRegistry;
 impl ProviderRegistry {
     pub fn resolve(&self, apiurl: &str, apikey: &str) -> ProviderResolution {
+        self.resolve_with_product(apiurl, apikey, "")
+    }
+
+    pub fn resolve_with_product(
+        &self,
+        apiurl: &str,
+        apikey: &str,
+        product: &str,
+    ) -> ProviderResolution {
+        if let Some(name) = recon_product(product)
+            && let Some(spec) = SPECS.iter().find(|spec| spec.name == name)
+        {
+            return ProviderResolution {
+                spec,
+                reason: "product",
+            };
+        }
         let host = Url::parse(apiurl)
             .ok()
             .and_then(|u| u.host_str().map(str::to_owned))
@@ -327,12 +378,45 @@ mod tests {
                 "aws_bedrock",
             ),
             ("https://server.codeium.com", "service-key", "windsurf"),
+            ("", "ark-cec4a1b2f3d94e5687a9", "volcengine_ark"),
+            (
+                "https://ark.cn-shanghai.volces.com/api/v3",
+                "token",
+                "volcengine_ark",
+            ),
         ] {
             assert_eq!(ProviderRegistry.resolve(url, key).spec.name, expected);
         }
+        assert!(
+            !ProviderRegistry
+                .resolve("https://console.volces.com", "t")
+                .spec
+                .name
+                .eq("volcengine_ark")
+        );
+        let ark = ProviderRegistry.specs()["volcengine_ark"];
+        assert!(ark.models.contains(&"ark-code-latest"));
         let xai = ProviderRegistry.specs()["xai"];
         assert!(xai.models.contains(&"grok-4.6"));
         assert!(xai.models.contains(&"grok-4.7"));
         assert_eq!(ProviderRegistry.specs()["qoder"].models, &["cantus"]);
+        assert_eq!(
+            ProviderRegistry
+                .resolve_with_product(
+                    "https://github.com/acme/app/blob/main/.env",
+                    "ooigvvhdstmbnjd6zxiijxj8ij9exdd8",
+                    "fofa"
+                )
+                .spec
+                .name,
+            "fofa"
+        );
+        assert_eq!(
+            ProviderRegistry
+                .resolve_with_product("https://paste.example", "token", "shodan")
+                .spec
+                .name,
+            "shodan"
+        );
     }
 }

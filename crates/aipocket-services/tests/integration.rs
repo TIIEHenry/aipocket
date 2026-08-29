@@ -226,6 +226,7 @@ async fn models_and_chat_use_provider_protocol_endpoints() {
     let address: std::net::SocketAddr = base.trim_start_matches("http://").parse().unwrap();
     let service = BalanceService::new(
         reqwest::Client::builder()
+            .no_proxy()
             .resolve("api.anthropic.com", address)
             .resolve("generativelanguage.googleapis.com", address)
             .resolve("open.bigmodel.cn", address)
@@ -386,6 +387,7 @@ async fn balance_and_validation_cover_provider_protocols_and_statuses() {
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let validator = aipocket_prober::Validator::new(
         reqwest::Client::builder()
+            .no_proxy()
             .resolve("api.anthropic.com", address)
             .resolve("generativelanguage.googleapis.com", address)
             .build()

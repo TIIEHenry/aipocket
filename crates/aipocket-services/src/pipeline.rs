@@ -1,4 +1,4 @@
-use aipocket_core::{Credential, ValidationResult};
+use aipocket_core::{Credential, ValidationResult, extract_recon_keys, is_recon_credential};
 use regex::Regex;
 use serde_json::{Map, Value};
 use std::{
@@ -21,6 +21,7 @@ static KEY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"\bksk_[A-Za-z0-9_-]{16,}\b",
         r"\bcrsr_[A-Za-z0-9_-]{32,}\b",
         r"\bpt-[A-Za-z0-9_-]{16,}\b",
+        r"\bark-[A-Za-z0-9_-]{20,}\b",
         r"\bABSK[A-Za-z0-9_+=/.-]{20,}\b",
         r"\b[a-f0-9]{32}\.[A-Za-z0-9]{16}\b",
         r"\bsk-[A-Za-z0-9_-]{6,}\b",
@@ -149,12 +150,17 @@ pub fn extract_credentials(hits: &[Value]) -> Vec<Credential> {
             for pattern in KEY_PATTERNS.iter() {
                 for found in pattern.find_iter(text) {
                     let apikey = found.as_str();
-                    if is_noise(apikey) || !seen.insert((apikey.to_owned(), apiurl.clone())) {
+                    let pair_url = if apikey.starts_with("crsr_") {
+                        "https://api.cursor.com".to_owned()
+                    } else {
+                        apiurl.clone()
+                    };
+                    if is_noise(apikey) || !seen.insert((apikey.to_owned(), pair_url.clone())) {
                         continue;
                     }
                     output.push(Credential {
                         apikey: apikey.into(),
-                        apiurl: apiurl.clone(),
+                        apiurl: pair_url,
                         source: pattern.as_str().into(),
                         source_type: source_type.into(),
                         backend: source.into(),
@@ -174,6 +180,31 @@ pub fn extract_credentials(hits: &[Value]) -> Vec<Credential> {
                         ..Default::default()
                     });
                 }
+            }
+            for found in extract_recon_keys(text) {
+                if is_noise(found.apikey)
+                    || !seen.insert((found.apikey.to_owned(), found.official_api_url.to_owned()))
+                {
+                    continue;
+                }
+                output.push(Credential {
+                    apikey: found.apikey.into(),
+                    apiurl: found.official_api_url.to_owned(),
+                    source: found.provider.into(),
+                    source_type: source_type.into(),
+                    backend: source.into(),
+                    host: host.into(),
+                    ip: hit
+                        .get("ip")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .into(),
+                    port: hit.get("port").map(value_to_string).unwrap_or_default(),
+                    product: found.provider.into(),
+                    raw_context: text.chars().take(500).collect(),
+                    routed_to_official: true,
+                    ..Default::default()
+                });
             }
         }
     }
@@ -196,7 +227,7 @@ pub fn prefilter(credentials: Vec<Credential>) -> Vec<Credential> {
         .into_iter()
         .filter(|credential| {
             !is_noise(&credential.apikey)
-                && !blocked_key_format(&credential.apikey)
+                && (!blocked_key_format(&credential.apikey) || is_recon_credential(credential))
                 && locations
                     .get(credential.apikey.as_str())
                     .is_none_or(|items| items.len() <= 5)
@@ -235,7 +266,8 @@ pub fn finalize_results(
                 )
             })
             .count();
-        if blocked_key_format(&result.credential.apikey) {
+        if blocked_key_format(&result.credential.apikey) && !is_recon_credential(&result.credential)
+        {
             reject(&mut result, "blocked-key-format:non-llm-token");
         } else if zero_width >= 10 {
             reject(&mut result, "honeypot:steganography");
@@ -348,6 +380,10 @@ fn infer_base_url(hit: &Value, host: &str) -> String {
     let suffix = if fingerprint.contains("openai")
         || fingerprint.contains("litellm")
         || fingerprint.contains("new-api")
+        || fingerprint.contains("one-api")
+        || fingerprint.contains("sub2api")
+        || fingerprint.contains("cliproxy")
+        || fingerprint.contains("cli proxy api")
     {
         "/v1"
     } else {
@@ -505,9 +541,15 @@ mod tests {
         })];
         let credentials = extract_credentials(&hits);
         assert_eq!(credentials.len(), 6);
+        let cursor = credentials
+            .iter()
+            .find(|credential| credential.apikey.starts_with("crsr_"))
+            .unwrap();
+        assert_eq!(cursor.apiurl, "https://api.cursor.com");
         assert!(
             credentials
                 .iter()
+                .filter(|credential| !credential.apikey.starts_with("crsr_"))
                 .all(|credential| credential.apiurl == "https://relay.example/v1")
         );
         let gemini = extract_credentials(&[json!({
@@ -525,6 +567,87 @@ mod tests {
         })]);
         assert_eq!(windsurf.len(), 1);
         assert_eq!(windsurf[0].apiurl, "https://server.codeium.com/api/v1");
+        let cursor_leak = extract_credentials(&[json!({
+            "host":"leak.example",
+            "protocol":"https",
+            "_source":"fofa",
+            "body":"CURSOR_API_KEY=crsr_A1B2C3D4E5F6G7H8I9J0K1M2N3O4P5Q6R7S8 api.cursor.com"
+        })]);
+        assert_eq!(cursor_leak.len(), 1);
+        assert_eq!(cursor_leak[0].apiurl, "https://api.cursor.com");
+    }
+
+    #[test]
+    fn extracts_fofa_and_shodan_keys_from_env_and_json_without_rewriting_source() {
+        let fofa_key = "ooigvvhdstmbnjd6zxiijxj8ij9exdd8";
+        let shodan_key = "n7k2q9w4e8r1t5y3u6i0o2p4a8s1d3f5";
+        let hits = extract_credentials(&[json!({
+            "host":"leak.example",
+            "protocol":"https",
+            "_source":"shodan",
+            "body": format!("FOFA_API_KEY={fofa_key}\nbare {fofa_key}\nSHODAN_API_KEY={shodan_key}")
+        })]);
+        let fofa = hits
+            .iter()
+            .find(|credential| credential.apikey == fofa_key)
+            .unwrap();
+        assert_eq!(fofa.product, "fofa");
+        assert_eq!(fofa.backend, "shodan");
+        assert_eq!(fofa.apiurl, "https://fofoapi.com");
+        let shodan = hits
+            .iter()
+            .find(|credential| credential.apikey == shodan_key)
+            .unwrap();
+        assert_eq!(shodan.product, "shodan");
+        assert_eq!(shodan.backend, "shodan");
+        assert_eq!(shodan.apiurl, "https://api.shodan.io");
+        assert_eq!(hits.len(), 2);
+
+        let json_hits = extract_credentials(&[json!({
+            "host":"cdn.example",
+            "_source":"fofa",
+            "body": format!(r#"{{"FOFA_API_KEY": "{fofa_key}", "SHODAN_API_KEY": "{shodan_key}"}}"#)
+        })]);
+        assert!(
+            json_hits
+                .iter()
+                .any(|credential| credential.apikey == fofa_key && credential.product == "fofa")
+        );
+        assert!(
+            json_hits
+                .iter()
+                .any(|credential| credential.apikey == shodan_key)
+        );
+        let hex = "0123456789abcdef0123456789abcdef";
+        assert!(
+            extract_credentials(&[json!({
+                "host":"leak.example",
+                "_source":"fofa",
+                "body": format!("token={hex}")
+            })])
+            .is_empty()
+        );
+        assert!(
+            prefilter(vec![Credential {
+                apikey: hex.into(),
+                backend: "fofa".into(),
+                product: "litellm".into(),
+                apiurl: "https://relay.example/v1".into(),
+                ..Default::default()
+            }])
+            .is_empty()
+        );
+        assert_eq!(
+            prefilter(vec![Credential {
+                apikey: hex.into(),
+                backend: "github".into(),
+                product: "fofa".into(),
+                apiurl: "https://fofoapi.com".into(),
+                ..Default::default()
+            }])
+            .len(),
+            1
+        );
     }
 
     #[test]

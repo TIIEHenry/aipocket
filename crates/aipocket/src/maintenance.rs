@@ -1857,6 +1857,11 @@ const REALTEST_PRODUCT_MARKERS: &[(&str, &[&str])] = &[
     ("lobechat", &["lobe-chat", "lobechat", "lobehub"]),
     ("newapi", &["new-api", "new api", "newapi"]),
     ("oneapi", &["one-api", "one api", "oneapi"]),
+    ("sub2api_panel", &["sub2api", "pincc.ai"]),
+    (
+        "cliproxyapi",
+        &["cliproxyapi", "cli proxy api", "cli-proxy-api"],
+    ),
     ("openrouter", &["openrouter", "open router", "sk-or-v1"]),
     ("openwebui", &["open webui", "open-webui", "openwebui"]),
     ("portkey", &["portkey"]),

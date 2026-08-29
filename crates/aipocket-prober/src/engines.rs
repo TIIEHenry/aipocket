@@ -697,9 +697,11 @@ fn weak_credentials() -> Vec<(String, String)> {
         .collect()
 }
 fn extract_credentials(text: &str, target: &str, product: &str) -> Vec<Credential> {
-    let pattern = regex::Regex::new(r"(?:sk-[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{16,}|nvapi-[A-Za-z0-9_-]{16,})").expect("credential regex");
-    pattern
+    let pattern = regex::Regex::new(r"(?:sk-[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{16,}|nvapi-[A-Za-z0-9_-]{16,}|ark-[A-Za-z0-9_-]{16,})").expect("credential regex");
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<Credential> = pattern
         .find_iter(text)
+        .filter(|item| seen.insert(item.as_str().to_owned()))
         .map(|item| Credential {
             apikey: item.as_str().into(),
             apiurl: target.into(),
@@ -708,7 +710,22 @@ fn extract_credentials(text: &str, target: &str, product: &str) -> Vec<Credentia
             product: product.into(),
             ..Default::default()
         })
-        .collect()
+        .collect();
+    for found in aipocket_core::extract_recon_keys(text) {
+        if !seen.insert(found.apikey.to_owned()) {
+            continue;
+        }
+        out.push(Credential {
+            apikey: found.apikey.into(),
+            apiurl: found.official_api_url.into(),
+            host: target.into(),
+            backend: "prober".into(),
+            product: found.provider.into(),
+            routed_to_official: true,
+            ..Default::default()
+        });
+    }
+    out
 }
 
 #[cfg(test)]

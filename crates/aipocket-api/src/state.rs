@@ -37,6 +37,7 @@ impl AppState {
         let settings = Arc::new(RwLock::new(settings));
         let timeout = settings.read().await.validate_timeout;
         let http = reqwest::Client::builder()
+            .user_agent("aipocket")
             .timeout(std::time::Duration::from_secs_f64(timeout))
             .redirect(reqwest::redirect::Policy::limited(2))
             .no_proxy()

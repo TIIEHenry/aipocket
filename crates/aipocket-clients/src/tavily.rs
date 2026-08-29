@@ -23,11 +23,20 @@ impl TavilyClient {
         let response = self
             .http
             .post(format!("{}/search", self.base_url))
+            .bearer_auth(&self.key)
+            .header("api-key", &self.key)
             .json(&json!({"api_key":self.key,"query":query,"search_depth":"advanced"}))
             .send()
             .await
             .context("Tavily request")?
             .error_for_status()?;
         Ok(response.json().await?)
+    }
+
+    pub async fn check(&self) -> Result<Value> {
+        if self.key.is_empty() {
+            anyhow::bail!("TAVILY_KEY not configured")
+        }
+        self.search("AI security").await
     }
 }

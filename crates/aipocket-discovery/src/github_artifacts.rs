@@ -1,4 +1,4 @@
-use aipocket_core::Credential;
+use aipocket_core::{Credential, extract_recon_keys};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -227,6 +227,8 @@ fn provider_endpoint(text: &str, key: &str) -> &'static str {
         "https://api.cursor.com"
     } else if key.starts_with("pt-") {
         "https://api.qoder.com"
+    } else if key.starts_with("ark-") {
+        "https://ark.cn-beijing.volces.com/api/v3"
     } else if key.starts_with("ABSK") {
         "https://bedrock.us-east-1.amazonaws.com"
     } else if key.starts_with("AIza") {
@@ -249,9 +251,9 @@ pub fn extract_artifact_text(
     file_path: &str,
     object_sha: &str,
 ) -> Vec<ExtractedArtifactSecret> {
-    let pattern=Regex::new(r"(?:sk-[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{16,}|nvapi-[A-Za-z0-9_-]{16,}|r8_[A-Za-z0-9_-]{16,}|xai-[A-Za-z0-9_-]{16,}|ksk_[A-Za-z0-9_-]{16,}|crsr_[A-Za-z0-9_-]{32,}|pt-[A-Za-z0-9_-]{16,}|ABSK[A-Za-z0-9_+=/.-]{20,})").unwrap();
+    let pattern=Regex::new(r"(?:sk-[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{16,}|nvapi-[A-Za-z0-9_-]{16,}|r8_[A-Za-z0-9_-]{16,}|xai-[A-Za-z0-9_-]{16,}|ksk_[A-Za-z0-9_-]{16,}|crsr_[A-Za-z0-9_-]{32,}|pt-[A-Za-z0-9_-]{16,}|ark-[A-Za-z0-9_-]{16,}|ABSK[A-Za-z0-9_+=/.-]{20,})").unwrap();
     let mut seen = HashSet::new();
-    pattern
+    let mut out: Vec<ExtractedArtifactSecret> = pattern
         .find_iter(text)
         .filter(|item| seen.insert(item.as_str().to_owned()))
         .map(|item| ExtractedArtifactSecret {
@@ -275,7 +277,32 @@ pub fn extract_artifact_text(
             line_start: None,
             line_end: None,
         })
-        .collect()
+        .collect();
+    for found in extract_recon_keys(text) {
+        if !seen.insert(found.apikey.to_owned()) {
+            continue;
+        }
+        out.push(ExtractedArtifactSecret {
+            credential: Credential {
+                apikey: found.apikey.into(),
+                apiurl: found.official_api_url.into(),
+                source: found.provider.into(),
+                source_type: source_kind.into(),
+                backend: "github".into(),
+                product: found.provider.into(),
+                raw_context: text.chars().take(2048).collect(),
+                routed_to_official: true,
+                ..Default::default()
+            },
+            source_kind: source_kind.into(),
+            change_side: change_side.into(),
+            file_path: file_path.into(),
+            object_sha: object_sha.into(),
+            line_start: None,
+            line_end: None,
+        });
+    }
+    out
 }
 pub fn extract_patch(
     patch: &str,
@@ -404,6 +431,58 @@ mod tests {
         );
 
         assert_eq!(secrets[0].source_kind, "blob");
+
+        let mixed = extract_artifact_text(
+            "FOFA_API_KEY=ooigvvhdstmbnjd6zxiijxj8ij9exdd8\nOPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz",
+            "https://github.com/acme/app/blob/main/.env",
+            "code_snapshot",
+            "context",
+            ".env",
+            "sha",
+        );
+        let fofa = mixed
+            .iter()
+            .find(|secret| secret.credential.product == "fofa")
+            .unwrap();
+        assert_eq!(fofa.credential.apiurl, "https://fofoapi.com");
+        assert_eq!(fofa.credential.backend, "github");
+        let openai = mixed
+            .iter()
+            .find(|secret| secret.credential.apikey.starts_with("sk-proj-"))
+            .unwrap();
+        assert_eq!(
+            openai.credential.apiurl,
+            "https://github.com/acme/app/blob/main/.env"
+        );
+        let sibling = extract_artifact_text(
+            "FOFA_API_KEY=ooigvvhdstmbnjd6zxiijxj8ij9exdd8\nOPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz",
+            "",
+            "blob",
+            "context",
+            ".env",
+            "sha",
+        );
+        assert_eq!(
+            sibling
+                .iter()
+                .find(|secret| secret.credential.apikey.starts_with("sk-proj-"))
+                .unwrap()
+                .credential
+                .apiurl,
+            ""
+        );
+        let json = extract_artifact_text(
+            r#"{"SHODAN_API_KEY": "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"}"#,
+            "https://github.com/acme/app/blob/main/config.json",
+            "code_snapshot",
+            "context",
+            "config.json",
+            "sha",
+        );
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0].credential.product, "shodan");
+        assert_eq!(json[0].credential.apiurl, "https://api.shodan.io");
+
         let patch = parse_unified_patch("@@ -1,2 +1,2 @@\n-old\n+new\n same");
         assert_eq!(patch.len(), 3);
         assert_eq!(patch[0].side, PatchSide::Removed);

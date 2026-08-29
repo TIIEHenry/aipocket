@@ -18,6 +18,10 @@ pub struct SettingsView {
     pub github_tokens: String,
     pub github_api_base_url: String,
     pub github_hunter_enabled: bool,
+    pub tavily_key: String,
+    pub tavily_base_url: String,
+    pub fofa_query_budget: usize,
+    pub shodan_query_budget: usize,
     pub validate_concurrency: usize,
     pub prober_concurrency: usize,
 }
@@ -36,6 +40,10 @@ pub struct SettingsUpdate {
     pub github_tokens: Option<String>,
     pub github_api_base_url: Option<String>,
     pub github_hunter_enabled: Option<bool>,
+    pub tavily_key: Option<String>,
+    pub tavily_base_url: Option<String>,
+    pub fofa_query_budget: Option<usize>,
+    pub shodan_query_budget: Option<usize>,
     pub validate_concurrency: Option<usize>,
     pub prober_concurrency: Option<usize>,
 }
@@ -55,6 +63,10 @@ impl SettingsView {
             github_tokens: mask_list(&s.github_tokens),
             github_api_base_url: s.github_api_base_url.clone(),
             github_hunter_enabled: s.github_hunter_enabled,
+            tavily_key: mask_apikey(&s.tavily_key),
+            tavily_base_url: s.tavily_base_url.clone(),
+            fofa_query_budget: s.fofa_query_budget,
+            shodan_query_budget: s.shodan_query_budget,
             validate_concurrency: s.validate_concurrency,
             prober_concurrency: s.prober_concurrency,
         }
@@ -92,6 +104,10 @@ impl SettingsUpdate {
         secret!(github_tokens, "GITHUB_TOKENS");
         put!(github_api_base_url, "GITHUB_API_BASE_URL");
         put!(github_hunter_enabled, "GITHUB_HUNTER_ENABLED");
+        secret!(tavily_key, "TAVILY_KEY");
+        put!(tavily_base_url, "TAVILY_BASE_URL");
+        put!(fofa_query_budget, "FOFA_QUERY_BUDGET");
+        put!(shodan_query_budget, "SHODAN_QUERY_BUDGET");
         put!(validate_concurrency, "VALIDATE_CONCURRENCY");
         put!(prober_concurrency, "PROBER_CONCURRENCY");
         out

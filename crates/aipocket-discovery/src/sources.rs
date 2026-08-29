@@ -249,18 +249,25 @@ impl DiscoverySource for FofaSource {
     }
     async fn fetch(&self, budgets: &SourceBudgets, _mode: ScanMode) -> Result<SourceFetchResult> {
         let selected = budgets.selected_queries.as_ref();
-        let queries = self
-            .queries
-            .iter()
-            .filter(|query| selected.is_none_or(|values| values.contains(query)))
-            .collect::<Vec<_>>();
+        let queries = selected
+            .map(|values| {
+                values
+                    .iter()
+                    .filter(|query| self.queries.iter().any(|owned| owned == *query))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| self.queries.iter().collect());
         let limit = budgets.fofa.unwrap_or(queries.len());
         let mut result = SourceFetchResult {
             source: "fofa".into(),
             ..Default::default()
         };
         let query_total = queries.len().min(limit);
+        let mut quota_exhausted = false;
         for (query_offset, query) in queries.into_iter().take(limit).enumerate() {
+            if quota_exhausted {
+                break;
+            }
             let query_index = query_offset + 1;
             report_progress(budgets, "fofa", query_index, query_total, 0, &result);
             for page in 1..=self.max_pages.max(1) {
@@ -293,7 +300,9 @@ impl DiscoverySource for FofaSource {
                         }
                     }
                     Err(error) => {
-                        result.errors.push(error.to_string());
+                        let message = error.to_string();
+                        quota_exhausted = aipocket_clients::fofa_quota_exhausted(&message);
+                        result.errors.push(message);
                         report_progress(budgets, "fofa", query_index, query_total, page, &result);
                         break;
                     }
@@ -327,11 +336,14 @@ impl DiscoverySource for ShodanSource {
     }
     async fn fetch(&self, budgets: &SourceBudgets, _mode: ScanMode) -> Result<SourceFetchResult> {
         let selected = budgets.selected_queries.as_ref();
-        let queries = self
-            .queries
-            .iter()
-            .filter(|query| selected.is_none_or(|values| values.contains(query)))
-            .collect::<Vec<_>>();
+        let queries = selected
+            .map(|values| {
+                values
+                    .iter()
+                    .filter(|query| self.queries.iter().any(|owned| owned == *query))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| self.queries.iter().collect());
         let limit = budgets.shodan.unwrap_or(queries.len());
         let mut result = SourceFetchResult {
             source: "shodan".into(),

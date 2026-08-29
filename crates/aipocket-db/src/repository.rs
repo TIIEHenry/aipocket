@@ -628,9 +628,20 @@ impl Repository {
         query_ids: &[String],
         version: u8,
         budget: usize,
+        exploration_ratio: f64,
     ) -> Result<Vec<String>> {
-        if budget >= query_ids.len() || self.pool().is_none() {
-            return Ok(query_ids.iter().take(budget).cloned().collect());
+        if query_ids.is_empty() || budget == 0 {
+            return Ok(Vec::new());
+        }
+        if budget >= query_ids.len() {
+            return Ok(query_ids.to_vec());
+        }
+        if self.pool().is_none() {
+            return Ok(select_with_exploration(
+                query_ids,
+                budget,
+                exploration_ratio,
+            ));
         }
         let pool = self.require_pool()?;
         let rows = if version >= 3 {
@@ -668,8 +679,8 @@ impl Repository {
                 .total_cmp(&left.1)
                 .then_with(|| left.2.cmp(&right.2))
         });
-        ranked.truncate(budget);
-        Ok(ranked.into_iter().map(|row| row.0).collect())
+        let ranked = ranked.into_iter().map(|row| row.0).collect::<Vec<_>>();
+        Ok(select_with_exploration(&ranked, budget, exploration_ratio))
     }
 
     pub async fn source_checkpoint(
@@ -1135,6 +1146,45 @@ fn run_day(id: &str) -> String {
     }
 }
 
+fn select_with_exploration(
+    ranked: &[String],
+    budget: usize,
+    exploration_ratio: f64,
+) -> Vec<String> {
+    if budget >= ranked.len() {
+        return ranked.to_vec();
+    }
+    let explore = ((budget as f64) * exploration_ratio.clamp(0.0, 0.5)).round() as usize;
+    let exploit = (budget.saturating_sub(explore)).max(1).min(budget);
+    let mut out: Vec<String> = ranked.iter().take(exploit).cloned().collect();
+    if out.len() >= budget {
+        return out;
+    }
+    let rest = &ranked[exploit.min(ranked.len())..];
+    if rest.is_empty() {
+        return out;
+    }
+    let need = budget - out.len();
+    let step = (rest.len() / need).max(1);
+    let mut index = 0;
+    while out.len() < budget && index < rest.len() {
+        let query = &rest[index];
+        if !out.iter().any(|existing| existing == query) {
+            out.push(query.clone());
+        }
+        index += step;
+    }
+    for query in rest {
+        if out.len() >= budget {
+            break;
+        }
+        if !out.iter().any(|existing| existing == query) {
+            out.push(query.clone());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1157,6 +1207,16 @@ mod tests {
             vec!["fofa", "github", "shodan"]
         );
     }
+
+    #[test]
+    fn exploration_keeps_head_queries_and_samples_the_tail() {
+        let ranked = (0..10).map(|index| format!("q{index}")).collect::<Vec<_>>();
+        let selected = select_with_exploration(&ranked, 5, 0.2);
+        assert_eq!(selected.len(), 5);
+        assert_eq!(&selected[..4], &ranked[..4]);
+        assert!(selected.iter().any(|query| query.as_str() != "q0"));
+    }
+
     #[test]
     fn groups_run_day() {
         assert_eq!(run_day("run_2026_07_24_12-00-00"), "2026-07-24");
