@@ -43,8 +43,9 @@ pub async fn ensure_schema(pool: &PgPool) -> Result<()> {
 }
 
 pub async fn postgres_ready(pool: &sqlx::PgPool) -> anyhow::Result<()> {
-    sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(pool)
-        .await?;
+    let probe = sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(pool);
+    tokio::time::timeout(std::time::Duration::from_secs(2), probe)
+        .await
+        .context("postgres ready timed out")??;
     Ok(())
 }
