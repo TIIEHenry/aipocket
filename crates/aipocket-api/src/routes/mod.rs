@@ -9,6 +9,7 @@ mod cve;
 mod honeypot;
 mod keys;
 mod manual;
+mod ops;
 mod runs;
 mod scan;
 mod settings;
@@ -25,6 +26,7 @@ use keys::{
 use manual::{
     bulk_delete_manual_targets, delete_manual_target, manual_targets, save_manual_targets,
 };
+use ops::{list_audit, ready};
 use runs::{delete_run, gpt_failed, retry_gpt_failed, run_log, run_results, runs};
 use scan::{scan_logs, scan_start, scan_status, scan_stop, scan_stream};
 use settings::{
@@ -35,6 +37,8 @@ use system::system_restart;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/ready", get(ready))
+        .route("/api/audit", get(list_audit))
         .route("/api/auth/login", post(crate::auth::login))
         .route("/api/auth/logout", post(crate::auth::logout))
         .route("/api/runs", get(runs))

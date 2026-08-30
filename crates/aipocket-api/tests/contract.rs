@@ -40,6 +40,37 @@ async fn health_is_public() {
 }
 
 #[tokio::test]
+async fn ready_is_public_and_skips_unconfigured_postgres() {
+    let response = app()
+        .await
+        .oneshot(Request::get("/api/ready").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["postgres"], "skipped");
+    assert!(body["redis"].is_string());
+}
+
+#[tokio::test]
+async fn audit_requires_auth_and_returns_events_array() {
+    let app = app().await;
+    let unauth = app
+        .clone()
+        .oneshot(Request::get("/api/audit").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+    let token = login_token(&app).await;
+    let (status, body) = authed(&app, "GET", "/api/audit", &token, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["events"].is_array());
+}
+
+#[tokio::test]
 async fn login_contract_and_protected_error_shape() {
     let app = app().await;
     let response = app
