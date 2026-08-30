@@ -2,7 +2,7 @@
 title: "架构决策记录"
 type: index
 status: current
-updated: 2026-08-29
+updated: 2026-08-30
 summary: "已接受与提议中的 ADR 列表"
 ---
 
@@ -13,3 +13,4 @@ summary: "已接受与提议中的 ADR 列表"
 | [001](001-docs-as-code.md) | 采用缩小版 docs-as-code，不建独立文档站 | accepted |
 | [002](002-pipeline-phase-spill.md) | `runs.phase` 为已完成 spill 游标；PG 下 hits 按页读 | accepted |
 | [003](003-scan-assembly-in-services.md) | 扫描装配落在 services，api/CLI 共用；跳过源结构化回传 | accepted |
+| [004](004-readiness-and-audit.md) | Liveness/readiness 分离；敏感操作审计不落明文 | accepted |
