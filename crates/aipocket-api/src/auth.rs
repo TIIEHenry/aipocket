@@ -25,19 +25,23 @@ struct Claims {
     iat: u64,
     exp: u64,
 }
-pub async fn login(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, ApiError> {
-    let client = headers
+pub fn client_key(headers: &HeaderMap) -> String {
+    headers
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(',').next())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown")
-        .to_owned();
+        .to_owned()
+}
+
+pub async fn login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, ApiError> {
+    let client = client_key(&headers);
     let now = Instant::now();
     {
         let mut failures = state.login_failures.0.lock().await;
@@ -128,4 +132,21 @@ pub async fn verify(token: &str, state: &AppState) -> Result<(), ApiError> {
         return Err(ApiError::unauthorized());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_key_empty_headers_is_unknown() {
+        assert_eq!(client_key(&HeaderMap::new()), "unknown");
+    }
+
+    #[test]
+    fn client_key_uses_first_x_forwarded_for_hop() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.1.1.1, 2.2.2.2".parse().unwrap());
+        assert_eq!(client_key(&headers), "1.1.1.1");
+    }
 }

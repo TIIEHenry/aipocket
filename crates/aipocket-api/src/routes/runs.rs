@@ -208,20 +208,12 @@ pub(crate) async fn run_log(
             );
         }
     }
+    let settings = s.settings.read().await;
     let log = s
         .repository
         .run_log(&id)
         .await?
-        .or_else(|| {
-            std::fs::read_to_string(
-                s.settings
-                    .blocking_read()
-                    .results_path()
-                    .join(&id)
-                    .join("run.log"),
-            )
-            .ok()
-        })
+        .or_else(|| std::fs::read_to_string(settings.results_path().join(&id).join("run.log")).ok())
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "no log for run"))?;
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], log).into_response())
 }
