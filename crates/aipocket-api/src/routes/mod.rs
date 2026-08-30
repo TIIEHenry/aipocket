@@ -23,13 +23,21 @@ use std::{convert::Infallible, path::PathBuf, time::Duration};
 use tokio_stream::wrappers::BroadcastStream;
 
 mod cve;
+mod honeypot;
 mod keys;
+mod manual;
 mod runs;
 mod shared;
 use cve::{cve_add, cve_sync, cves};
+use honeypot::{
+    bulk_delete_honeypots, create_honeypot, delete_honeypot, honeypots, update_honeypot,
+};
 use keys::{
     all_keys, export, high_value, high_value_reveal, key_balance, key_chat, key_models, key_reveal,
     keys_balance, transition_keys,
+};
+use manual::{
+    bulk_delete_manual_targets, delete_manual_target, manual_targets, save_manual_targets,
 };
 use runs::{delete_run, gpt_failed, retry_gpt_failed, run_log, run_results, runs};
 use shared::{Since, all_source, valid_kind};
@@ -90,198 +98,6 @@ pub fn router() -> Router<AppState> {
 }
 async fn health() -> Json<Value> {
     Json(json!({"ok":true}))
-}
-#[derive(Default, Deserialize)]
-struct PageQuery {
-    #[serde(default)]
-    q: String,
-    source: Option<String>,
-    enabled_only: Option<bool>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-}
-async fn honeypots(
-    _: Auth,
-    State(s): State<AppState>,
-    Query(q): Query<PageQuery>,
-) -> Result<Json<Value>, ApiError> {
-    let limit = q.limit.unwrap_or(100).clamp(1, 500);
-    let offset = q.offset.unwrap_or(0).max(0);
-    let (rows, total) = s
-        .repository
-        .list_honeypots(&q.q, q.source.as_deref(), limit, offset)
-        .await?;
-    Ok(Json(
-        json!({"results":rows,"total":total,"limit":limit,"offset":offset}),
-    ))
-}
-async fn manual_targets(
-    _: Auth,
-    State(s): State<AppState>,
-    Query(q): Query<PageQuery>,
-) -> Result<Json<Value>, ApiError> {
-    let limit = q.limit.unwrap_or(100).clamp(1, 500);
-    let offset = q.offset.unwrap_or(0).max(0);
-    let (rows, total) = s
-        .repository
-        .list_manual_targets(q.enabled_only.unwrap_or(false), limit, offset)
-        .await?;
-    Ok(Json(
-        json!({"results":rows,"total":total,"limit":limit,"offset":offset}),
-    ))
-}
-#[derive(Deserialize)]
-struct HoneypotCreate {
-    host: String,
-    #[serde(default = "manual_reason")]
-    reason: String,
-    #[serde(default)]
-    notes: String,
-}
-fn manual_reason() -> String {
-    "honeypot:manual".into()
-}
-#[derive(Deserialize)]
-struct HoneypotUpdate {
-    host_key: String,
-    reason: Option<String>,
-    notes: Option<String>,
-}
-#[derive(Deserialize)]
-struct HoneypotDeleteQuery {
-    host_key: String,
-}
-#[derive(Deserialize)]
-struct HoneypotBulkDelete {
-    #[serde(default)]
-    host_keys: Vec<String>,
-}
-async fn create_honeypot(
-    _: Auth,
-    State(s): State<AppState>,
-    Json(b): Json<HoneypotCreate>,
-) -> Result<Json<Value>, ApiError> {
-    let origin =
-        aipocket_core::url_sanitize::sanitize_origin(&b.host).map_err(ApiError::internal)?;
-    let key = aipocket_core::url_sanitize::host_key(&origin).map_err(ApiError::internal)?;
-    Ok(Json(
-        serde_json::to_value(
-            s.repository
-                .create_honeypot(&origin, &key, &b.reason, &b.notes)
-                .await?,
-        )
-        .map_err(ApiError::internal)?,
-    ))
-}
-async fn update_honeypot(
-    _: Auth,
-    State(s): State<AppState>,
-    Json(b): Json<HoneypotUpdate>,
-) -> Result<Json<Value>, ApiError> {
-    let row = s
-        .repository
-        .update_honeypot(&b.host_key, b.reason.as_deref(), b.notes.as_deref())
-        .await?
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "honeypot not found"))?;
-    Ok(Json(serde_json::to_value(row).map_err(ApiError::internal)?))
-}
-async fn delete_honeypot(
-    _: Auth,
-    State(s): State<AppState>,
-    Query(q): Query<HoneypotDeleteQuery>,
-) -> Result<Json<Value>, ApiError> {
-    s.repository
-        .delete_honeypots(std::slice::from_ref(&q.host_key))
-        .await?;
-    Ok(Json(json!({"ok":true,"host_key":q.host_key})))
-}
-async fn bulk_delete_honeypots(
-    _: Auth,
-    State(s): State<AppState>,
-    Json(b): Json<HoneypotBulkDelete>,
-) -> Result<Json<Value>, ApiError> {
-    let deleted = s.repository.delete_honeypots(&b.host_keys).await?;
-    Ok(Json(json!({"deleted":deleted})))
-}
-#[derive(Deserialize)]
-struct ManualTargetsSave {
-    urls: String,
-    #[serde(default)]
-    notes: String,
-    #[serde(default)]
-    replace: bool,
-}
-#[derive(Deserialize)]
-struct ManualTargetDeleteQuery {
-    url: String,
-}
-#[derive(Deserialize)]
-struct ManualTargetsDelete {
-    #[serde(default)]
-    urls: Vec<String>,
-}
-async fn save_manual_targets(
-    _: Auth,
-    State(s): State<AppState>,
-    Json(b): Json<ManualTargetsSave>,
-) -> Result<Json<Value>, ApiError> {
-    if b.replace {
-        let (existing, _) = s.repository.list_manual_targets(false, 10_000, 0).await?;
-        let urls: Vec<_> = existing.into_iter().map(|target| target.url).collect();
-        s.repository.delete_manual_targets(&urls).await?;
-    }
-    let mut targets = Vec::new();
-    let mut rejected = Vec::new();
-    for raw in b
-        .urls
-        .lines()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        match aipocket_core::url_sanitize::sanitize_origin(raw) {
-            Ok(origin) => {
-                let parsed = url::Url::parse(&origin).map_err(ApiError::internal)?;
-                let target = aipocket_core::ManualTarget {
-                    url: origin.clone(),
-                    host_key: aipocket_core::url_sanitize::host_key(&origin)
-                        .map_err(ApiError::internal)?,
-                    scheme: parsed.scheme().into(),
-                    hostname: parsed.host_str().unwrap_or_default().into(),
-                    port: parsed.port_or_known_default().unwrap_or(443),
-                    enabled: true,
-                    notes: b.notes.clone(),
-                    ..Default::default()
-                };
-                targets.push(s.repository.upsert_manual_target(&target).await?);
-            }
-            Err(_) => rejected.push(raw.to_owned()),
-        }
-    }
-    Ok(Json(
-        json!({"added":targets.len(),"updated":0,"rejected":rejected,"targets":targets}),
-    ))
-}
-async fn delete_manual_target(
-    _: Auth,
-    State(s): State<AppState>,
-    Query(q): Query<ManualTargetDeleteQuery>,
-) -> Result<Json<Value>, ApiError> {
-    let url = aipocket_core::url_sanitize::sanitize_origin(&q.url).map_err(ApiError::internal)?;
-    let deleted = s.repository.delete_manual_targets(&[url]).await?;
-    Ok(Json(json!({"deleted":deleted})))
-}
-async fn bulk_delete_manual_targets(
-    _: Auth,
-    State(s): State<AppState>,
-    Json(b): Json<ManualTargetsDelete>,
-) -> Result<Json<Value>, ApiError> {
-    let urls: Vec<_> = b
-        .urls
-        .iter()
-        .filter_map(|url| aipocket_core::url_sanitize::sanitize_origin(url).ok())
-        .collect();
-    let deleted = s.repository.delete_manual_targets(&urls).await?;
-    Ok(Json(json!({"deleted":deleted})))
 }
 async fn get_settings(_: Auth, State(s): State<AppState>) -> Json<SettingsView> {
     let settings = s.settings.read().await;
