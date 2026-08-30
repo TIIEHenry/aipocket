@@ -41,3 +41,10 @@ pub async fn ensure_schema(pool: &PgPool) -> Result<()> {
         .context("commit PostgreSQL schema transaction")?;
     Ok(())
 }
+
+pub async fn postgres_ready(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(pool)
+        .await?;
+    Ok(())
+}
