@@ -1,10 +1,15 @@
-use crate::{auth::Auth, error::ApiError, routes::shared::valid_kind, state::AppState};
+use crate::{
+    auth::Auth,
+    error::ApiError,
+    routes::{ops::record_audit, shared::valid_kind},
+    state::AppState,
+};
 use aipocket_core::Credential;
 use aipocket_db::mask_apikey;
 use axum::{
     Json,
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use futures::{StreamExt, stream};
@@ -53,6 +58,7 @@ pub(crate) struct HighReveal {
 pub(crate) async fn high_value_reveal(
     _: Auth,
     State(s): State<AppState>,
+    headers: HeaderMap,
     Json(b): Json<HighReveal>,
 ) -> Result<Json<Value>, ApiError> {
     for row in s.repository.high_value(false).await? {
@@ -67,6 +73,13 @@ pub(crate) async fn high_value_reveal(
             .or_else(|| row.pointer("/credential/apiurl").and_then(Value::as_str))
             .unwrap_or_default();
         if mask_apikey(key) == b.masked && b.apiurl.as_deref().is_none_or(|v| v == url) {
+            record_audit(
+                &s,
+                &headers,
+                "high_value_reveal",
+                json!({"masked": b.masked}),
+            )
+            .await;
             return Ok(Json(json!({"apikey":key,"apiurl":url})));
         }
     }
@@ -368,6 +381,7 @@ pub(crate) struct ChatRequest {
 pub(crate) async fn key_chat(
     _: Auth,
     State(s): State<AppState>,
+    headers: HeaderMap,
     Json(b): Json<ChatRequest>,
 ) -> Result<Json<Value>, ApiError> {
     if b.apikey.is_empty() {
@@ -384,6 +398,7 @@ pub(crate) async fn key_chat(
             "model required (pick one from /api/key/models first)",
         ));
     }
+    let masked = mask_apikey(&b.apikey);
     let result = s
         .balance
         .test_chat(
@@ -395,6 +410,13 @@ pub(crate) async fn key_chat(
             &b.model,
         )
         .await?;
+    record_audit(
+        &s,
+        &headers,
+        "chat",
+        json!({"masked": masked, "model": b.model}),
+    )
+    .await;
     Ok(Json(json!({
         "success":result.success,
         "status_code":result.status_code,
@@ -416,6 +438,7 @@ pub(crate) struct RevealRequest {
 pub(crate) async fn key_reveal(
     _: Auth,
     State(s): State<AppState>,
+    headers: HeaderMap,
     Json(b): Json<RevealRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = s.repository.run_records(&b.run_id, &b.kind, false).await?;
@@ -433,6 +456,14 @@ pub(crate) async fn key_reveal(
                 && b.masked.as_deref() == Some(&mask_apikey(key))
                 && b.apiurl.as_deref().is_none_or(|v| v == url))
         {
+            let masked = b.masked.clone().unwrap_or_else(|| mask_apikey(key));
+            record_audit(
+                &s,
+                &headers,
+                "reveal",
+                json!({"masked": masked, "run_id": b.run_id, "kind": b.kind}),
+            )
+            .await;
             return Ok(Json(json!({"apikey":key,"apiurl":url})));
         }
     }
@@ -461,6 +492,7 @@ pub(crate) fn json_format() -> String {
 pub(crate) async fn export(
     _: Auth,
     State(s): State<AppState>,
+    headers: HeaderMap,
     Json(b): Json<ExportRequest>,
 ) -> Result<Response, ApiError> {
     let rows = match b.dataset.as_str() {
@@ -569,6 +601,17 @@ pub(crate) async fn export(
             ));
         }
     };
+    record_audit(
+        &s,
+        &headers,
+        "export",
+        json!({
+            "dataset": b.dataset,
+            "format": b.format,
+            "count": rows.len(),
+        }),
+    )
+    .await;
     Ok((
         [
             (header::CONTENT_TYPE, media),

@@ -76,7 +76,6 @@ pub(crate) async fn list_audit(
     ))
 }
 
-#[allow(dead_code)] // wired onto reveal/chat/export/restart in the next change
 pub(crate) async fn record_audit(s: &AppState, headers: &HeaderMap, action: &str, detail: Value) {
     let client = client_key(headers);
     tracing::info!(action, client = %client, "audit");
