@@ -2,7 +2,7 @@
 title: "Web API"
 type: reference
 status: current
-updated: 2026-08-19
+updated: 2026-08-30
 summary: "扫描启动体、SSE、密钥类请求形状；路径以 routes.rs 为准，字段以前端 api.ts 为对照"
 ---
 
@@ -44,7 +44,9 @@ summary: "扫描启动体、SSE、密钥类请求形状；路径以 routes.rs �
 
 成功立即返回当前 `ScanStatus`（`state: running`）。若已有 running/stopping，启动失败。源如何挂载见 [扫描流水线](../systems/scan-pipeline.md)。
 
-`GET /api/scan/status` 同形：`state`、`source`、`mode`、`run_id`、`phase`、`progress`、`error`、`log_seq`。
+`GET /api/scan/status` 同形：`state`、`source`、`mode`、`run_id`、`phase`、`progress`、`error`、`log_seq`、`skipped_sources`。
+
+`skipped_sources` 为 `{source, reason}` 数组，记录装配时 fail-closed 的源（无则空）。闸门与装配见 [ADR-003](../../dev/decisions/003-scan-assembly-in-services.md) 和 [扫描流水线](../systems/scan-pipeline.md)。
 
 `POST /api/scan/stop` 取消 `CancellationToken`。
 

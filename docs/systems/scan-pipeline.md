@@ -2,7 +2,7 @@
 title: "扫描流水线"
 type: architecture
 status: current
-updated: 2026-08-29
+updated: 2026-08-30
 summary: "Scanner 阶段、ScanPolicy、发现源装配、spill/resume、ScanEvent 与高价值入库条件"
 ---
 
@@ -48,16 +48,18 @@ Web/CLI 不传 `mode` 时为 incremental。
 
 ## 发现源如何装配
 
-`POST /api/scan/start`（及 CLI `--source`）决定挂哪些 `DiscoverySource`：
+HTTP `scan_start` 与 CLI `run_scan` 都调用 `aipocket_services::assemble_sources` 决定挂哪些 `DiscoverySource`。查询组合走 `aipocket_discovery::compose_queries`（[provider packs](../../crates/aipocket-discovery/docs/packs.md) + `legacy_queries`）。`github_pack_ids` 可收窄 GitHub pack。
+
+装配时 fail-closed 的源记入 `ScanStatus.skipped_sources`，并写入扫描日志（`跳过数据源 · {source} · {reason}`；CLI 用 `tracing::warn`）。闸门条件见 [ADR-003](../../dev/decisions/003-scan-assembly-in-services.md)，此处不重复表。未跳过时：
 
 | 请求值 | 实际挂上的源 |
 |--------|----------------|
-| `all` 或 `fofa` | `FofaSource`（有查询才有意义） |
+| `all` 或 `fofa` | `FofaSource` |
 | `all` 或 `shodan` | `ShodanSource` |
-| `all` 或 `github` | **仅当** `GITHUB_TOKENS` 非空 **且** `DATABASE_URL` 已启用时挂 `GithubSource`；否则静默不加 GitHub（fail closed） |
+| `all` 或 `github` | `GithubSource` |
 | `manual` | `ManualSource`（读 `manual_targets`）；`manual_enrich` 含 `fofa`/`shodan` 时再挂 `ManualEnrichSource` |
 
-查询来自 [provider packs](../../crates/aipocket-discovery/docs/packs.md) 加上 `legacy_queries`。`github_pack_ids` 可收窄 GitHub pack。
+有意行为变更：缺少 FOFA/SHODAN keys 时跳过该源（可见），不再挂上空客户端再逐条失败。
 
 Budget：`FOFA_QUERY_BUDGET`、`SHODAN_QUERY_BUDGET`、`GITHUB_COMMIT_QUERY_BUDGET`、`GITHUB_CODE_QUERY_BUDGET`。Hits 按页 spill 到 `scan_discovery_hits`（每个 `DiscoverySource::fetch` 返回后立刻写入）；有 PG 时 Scanner 不保留 O(total_hits) 的 banner。单源 fetch 内部仍可能缓冲该源本轮结果。
 

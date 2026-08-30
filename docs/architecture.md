@@ -2,7 +2,7 @@
 title: "架构概览"
 type: architecture
 status: current
-updated: 2026-08-29
+updated: 2026-08-30
 summary: "AIPocket 系统全景、crate 依赖方向、扫描流水线与数据职责"
 ---
 
@@ -69,7 +69,7 @@ phase 是**已完成 spill 的游标**，不是「正在执行」。有 PG 时 S
 5. **validate**：对候选密钥做提供商验证。
 6. **finalize**：余额、高价值入库、蜜罐标记、写 run 日志。
 
-增量模式走 query budget 与 Redis 去重；`mode=full` 忽略 watermark、关闭跨 run 去重并强制重验。GitHub 在缺 token 或未启用 PostgreSQL 时**不会挂上** `GithubSource`。细节见 [扫描流水线](systems/scan-pipeline.md)。
+增量模式走 query budget 与 Redis 去重；`mode=full` 忽略 watermark、关闭跨 run 去重并强制重验。装配时 fail-closed 的源（缺 token/PG 的 GitHub、缺 key 的 FOFA/Shodan 等）记入 `skipped_sources`，不再静默省略。细节见 [扫描流水线](systems/scan-pipeline.md)。
 
 ## 数据职责
 

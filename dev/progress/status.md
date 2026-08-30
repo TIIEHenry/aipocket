@@ -2,14 +2,13 @@
 title: "Development Progress"
 type: progress
 status: current
-updated: 2026-08-29
+updated: 2026-08-30
 summary: "FOFA/Shodan 泄露扫描闭环：上下文提取、官方验证、三源 pack"
 ---
 
 # Current session
 
-- 2026-08-29：ADR-002 — `runs.phase` 为已完成 spill 游标；PG 下 discovery hits 按页读写，resume 不再把未提取标成 `validate`。
-- FOFA/Shodan API key 泄露闭环：上下文关键字提取（含 JSON）、GitHub 泄漏页强制官方 URL、`product` 归因验证、`info/my` / `api-info` 查配额；`fofa_leak`/`shodan_leak` pack 进入增量预算。验证路由按 host 而非 URL 子串；FOFA 成功判定与客户端 error 旗标对齐，且要求数值 fcoin 或非空账号字段。
+- 2026-08-30：ADR-003 — `assemble_sources` 为 HTTP/CLI 单一装配器；装配 fail-closed 的源经 `ScanStatus.skipped_sources` 可见（Phase 1；routes 拆分未做）。
 
 # Completed
 
