@@ -1,7 +1,7 @@
 ---
 title: "扫描装配收口 + routes 拆分 实施方案"
 type: plan
-status: in_progress
+status: implemented
 updated: 2026-08-30
 created: 2026-08-29
 summary: "assemble_sources 落 services、SkippedSource 结构化回传、routes.rs 按域拆分并纳入覆盖率门禁"

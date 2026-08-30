@@ -2,7 +2,7 @@
 title: "文档索引"
 type: index
 status: current
-updated: 2026-08-29
+updated: 2026-08-30
 summary: "AIPocket 全局文档导航；含验证状态机、Redis 契约、crate 内部设计入口"
 ---
 
@@ -54,7 +54,7 @@ summary: "AIPocket 全局文档导航；含验证状态机、Redis 契约、crat
 | 文档 | 真源 |
 |------|------|
 | [CLI](reference/cli.md) | `aipocket --help` |
-| [Web API](reference/api.md) | `crates/aipocket-api/src/routes.rs` |
+| [Web API](reference/api.md) | `crates/aipocket-api/src/routes/` |
 
 ## Crate
 

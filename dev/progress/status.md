@@ -8,10 +8,12 @@ summary: "FOFA/Shodan 泄露扫描闭环：上下文提取、官方验证、三�
 
 # Current session
 
-- 2026-08-30：ADR-003 — `assemble_sources` 为 HTTP/CLI 单一装配器；装配 fail-closed 的源经 `ScanStatus.skipped_sources` 可见（Phase 1；routes 拆分未做）。
+- 2026-08-30：Phase 2 完成 — `routes.rs` 已拆为 `routes/` 域模块；CI 覆盖率不再豁免该路径。
 
 # Completed
 
+- 2026-08-30：`aipocket-api` routes 按域拆到 `routes/`；契约测试覆盖 handler；CI llvm-cov 去掉 `routes.rs` 豁免。
+- 2026-08-30：ADR-003 — `assemble_sources` 为 HTTP/CLI 单一装配器；装配 fail-closed 的源经 `ScanStatus.skipped_sources` 可见。
 - 2026-08-29：Pipeline phase 真源 + 流式 spill（ADR-002）。
 - 2026-08-29：FOFA/Shodan 泄露扫描闭环（提取、发现 pack、官方验证与余额）。
 - 2026-08-26：火山方舟 `volcengine_ark` 专项发现与验证。

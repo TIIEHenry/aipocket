@@ -2,7 +2,7 @@
 title: "文档维护规则"
 type: concept
 status: accepted
-updated: 2026-08-18
+updated: 2026-08-30
 summary: "AIPocket 文档维护规则：知识层与行动层分离、frontmatter、提交门禁、归档不删除"
 ---
 
@@ -23,7 +23,7 @@ summary: "AIPocket 文档维护规则：知识层与行动层分离、frontmatte
 | 根指令 | `AGENTS.md`、`CLAUDE.md` | Agent 入口（豁免 frontmatter） |
 | 配置真源 | `.env.example` + `Settings` | 环境变量名与默认值 |
 | CLI 真源 | `crates/aipocket` 的 Clap 定义 | 参数以 `--help` 为准 |
-| HTTP 真源 | `crates/aipocket-api/src/routes.rs` | 路径以代码为准（OpenAPI 第二期） |
+| HTTP 真源 | `crates/aipocket-api/src/routes/` | 路径以代码为准（OpenAPI 第二期） |
 
 **Agent 新会话必读**：[`AGENTS.md`](../AGENTS.md) → 本文件 → [`dev/progress/status.md`](../dev/progress/status.md)
 

@@ -2,7 +2,7 @@
 title: "添加 API 端点"
 type: guide
 status: current
-updated: 2026-08-18
+updated: 2026-08-30
 summary: "路由与 DTO 放 aipocket-api，业务放 services，并补契约测试"
 ---
 
@@ -10,13 +10,13 @@ summary: "路由与 DTO 放 aipocket-api，业务放 services，并补契约测�
 
 ## 步骤
 
-1. 在 `crates/aipocket-api/src/routes.rs` 注册路由；DTO 用 Serde。
+1. 在 `crates/aipocket-api/src/routes/mod.rs` 注册路由，handler 放对应域模块（`routes/scan.rs` 等）；DTO 用 Serde。
 2. Handler 只做鉴权、取参、调 `aipocket-services` / `Repository`。**不要**在 handler 里写扫描或验证逻辑。
 3. 扫描启停不要绕过 `ScanManager`：它负责 running 互斥、日志环形缓冲、SSE broadcast 与把 `ScanEvent` 写入 run 日志。
 4. 需要登录的接口走现有 JWT 中间件（`auth::verify`）。
 5. 在 `crates/aipocket-api/tests/` 加契约测试（请求/响应形状，而不是实现细节）。
 6. 前端若要调用：只加 `frontend/src/lib/api.ts`，页面不要裸 `fetch`。
-7. 更新 [Web API](../reference/api.md) 对应资源小节（路径以 `routes.rs` 为准）。
+7. 更新 [Web API](../reference/api.md) 对应资源小节（路径以 `routes/` 下的域模块为准）。
 
 ## 不变量
 

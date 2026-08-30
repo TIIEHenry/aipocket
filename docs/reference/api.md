@@ -3,12 +3,12 @@ title: "Web API"
 type: reference
 status: current
 updated: 2026-08-30
-summary: "扫描启动体、SSE、密钥类请求形状；路径以 routes.rs 为准，字段以前端 api.ts 为对照"
+summary: "扫描启动体、SSE、密钥类请求形状；路径以 routes/ 模块为准，字段以前端 api.ts 为对照"
 ---
 
 # Web API
 
-路径真源：`crates/aipocket-api/src/routes.rs`。前端对照：`frontend/src/lib/api.ts`。第二期再接 OpenAPI。
+路径真源：`crates/aipocket-api/src/routes/`。前端对照：`frontend/src/lib/api.ts`。第二期再接 OpenAPI。
 
 鉴权见 [Web 鉴权](../systems/auth.md)。除 `/api/health` 与 login 外均需 JWT。
 
