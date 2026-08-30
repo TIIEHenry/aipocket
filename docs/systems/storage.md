@@ -2,7 +2,7 @@
 title: "存储"
 type: architecture
 status: current
-updated: 2026-08-18
+updated: 2026-08-30
 summary: "PostgreSQL 真源、spill 表职责、Redis key 格式（稳定契约）与 JSONL 双写"
 ---
 
@@ -53,6 +53,7 @@ summary: "PostgreSQL 真源、spill 表职责、Redis key 格式（稳定契约�
 | `github_artifacts` | 制品工作队列（**无明文密钥**） |
 | `honeypot_sites` | `host_key` = hostname:port，扫描开始加载 |
 | `manual_targets` | 自定义狩猎 origin（规范化后的 scheme://host[:port]） |
+| `audit_events` | 敏感操作审计（`action` / `client` / `detail` JSONB；无明文密钥） |
 
 Schema 只允许 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`。禁止 drop 生产表、`down -v`。
 

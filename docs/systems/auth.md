@@ -2,8 +2,8 @@
 title: "Web 鉴权"
 type: architecture
 status: current
-updated: 2026-08-18
-summary: "全局密码换 JWT、登录节流、SSE query token、设置页打码回写"
+updated: 2026-08-30
+summary: "全局密码换 JWT、登录节流、client_key、未鉴权就绪探测与敏感操作审计"
 ---
 
 # Web 鉴权
@@ -14,8 +14,16 @@ summary: "全局密码换 JWT、登录节流、SSE query token、设置页打码
 
 - 没有多用户。`WEB_PASSWORD` 是唯一口令；比较用恒定时间 `ct_eq`。
 - `POST /api/auth/login` → JWT HS256（`WEB_JWT_SECRET`），`exp = now + WEB_TOKEN_TTL`。
-- 其余 `/api/*`（除 `/api/health` 与 login）用 `Authorization: Bearer <token>`。
+- 其余 `/api/*`（除 `/api/health`、`/api/ready` 与 login）用 `Authorization: Bearer <token>`。
 - `POST /api/auth/logout` 只让客户端丢 token；服务端无黑名单，过期前旧 JWT 仍有效。
+
+## `client_key`
+
+`auth::client_key(&HeaderMap)`：取 `X-Forwarded-For` 第一段，否则 `"unknown"`。登录失败节流与 `audit_events.client` 共用。
+
+## 审计
+
+`reveal` / `high_value_reveal` / `chat` / `export` / `restart` 在成功路径写入 `audit_events`（无 PG 则只打 tracing，不阻断操作）。列表见 [Web API](../reference/api.md)；决策见 [ADR-004](../../dev/decisions/004-readiness-and-audit.md)。
 
 ## 登录节流
 

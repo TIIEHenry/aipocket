@@ -1,7 +1,7 @@
 ---
 title: "Readiness + 敏感操作审计 实施方案"
 type: plan
-status: draft
+status: implemented
 updated: 2026-08-30
 created: 2026-08-30
 summary: "/api/ready 探 PG/Redis；audit_events 记 reveal/chat/export/restart；run_log 去掉 blocking_read"

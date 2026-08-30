@@ -3,14 +3,22 @@ title: "Web API"
 type: reference
 status: current
 updated: 2026-08-30
-summary: "扫描启动体、SSE、密钥类请求形状；路径以 routes/ 模块为准，字段以前端 api.ts 为对照"
+summary: "探活与就绪、审计、扫描启动体、SSE、密钥类请求形状；路径以 routes/ 模块为准"
 ---
 
 # Web API
 
 路径真源：`crates/aipocket-api/src/routes/`。前端对照：`frontend/src/lib/api.ts`。第二期再接 OpenAPI。
 
-鉴权见 [Web 鉴权](../systems/auth.md)。除 `/api/health` 与 login 外均需 JWT。
+鉴权见 [Web 鉴权](../systems/auth.md)。除 `/api/health`、`/api/ready` 与 login 外均需 JWT。探活与依赖就绪的分离见 [ADR-004](../../dev/decisions/004-readiness-and-audit.md)。
+
+## 探活与就绪
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/api/health` | 无 | 进程保活，形状固定 `{ok:true}` |
+| GET | `/api/ready` | 无 | 探测 PostgreSQL / Redis。`postgres` / `redis` 为 `ok` \| `skipped` \| `error`。仅 postgres 已配置且探测失败时 HTTP 503 且 `ok:false`；Redis 失败仍 200，`degraded:true` |
+| GET | `/api/audit` | JWT | 最近敏感操作；`?limit=` 默认 100、上限 500。`reveal` / `high_value_reveal` / `chat` / `export` / `restart` 成功路径会写入（detail 只含打码与元数据，无明文密钥） |
 
 ## 登录
 

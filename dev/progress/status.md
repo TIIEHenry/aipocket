@@ -8,7 +8,7 @@ summary: "FOFA/Shodan 泄露扫描闭环：上下文提取、官方验证、三�
 
 # Current session
 
-- 2026-08-30：Phase 2 完成 — `routes.rs` 已拆为 `routes/` 域模块；CI 覆盖率不再豁免该路径。
+- 2026-08-30：ADR-004 — `GET /api/ready` 探 PG/Redis；`GET /api/audit`；reveal/chat/export/restart 写 `audit_events`（无明文密钥）。
 
 # Completed
 

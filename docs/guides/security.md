@@ -2,7 +2,7 @@
 title: "安全边界"
 type: guide
 status: current
-updated: 2026-08-18
+updated: 2026-08-30
 summary: "授权范围、探测风险门控、以及会消耗目标额度的 Web 操作"
 ---
 
@@ -35,7 +35,7 @@ v1 只处理响应中明确为公开的仓库。缺少 token 或 `DATABASE_URL` 
 | `POST /api/key/balance`、批量 balance | 访问提供商余额接口，可能计入配额 |
 | reveal | 列表默认打码；`POST /api/key/reveal` 与 high-value reveal 返回明文 |
 
-导出、截图、日志不要把明文密钥提交进 git。
+导出、截图、日志不要把明文密钥提交进 git。reveal / chat / export / restart 会写审计，detail 只有打码与元数据，见 [ADR-004](../../dev/decisions/004-readiness-and-audit.md)。
 
 ## 鉴权
 
