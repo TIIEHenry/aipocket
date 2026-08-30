@@ -21,6 +21,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{convert::Infallible, path::PathBuf, time::Duration};
 use tokio_stream::wrappers::BroadcastStream;
+
+mod shared;
+use shared::{Since, all_source, valid_kind};
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/health", get(health))
@@ -786,9 +790,6 @@ struct RevealRequest {
     apiurl: Option<String>,
     index: Option<usize>,
 }
-fn valid_kind() -> String {
-    "valid".into()
-}
 async fn key_reveal(
     _: Auth,
     State(s): State<AppState>,
@@ -1309,9 +1310,6 @@ struct ScanStart {
     #[serde(default)]
     resume_run_id: String,
 }
-fn all_source() -> String {
-    "all".into()
-}
 
 #[cfg(test)]
 mod key_probe_tests {
@@ -1476,12 +1474,6 @@ async fn scan_stop(_: Auth, State(s): State<AppState>) -> Result<Json<ScanStatus
 }
 async fn scan_status(_: Auth, State(s): State<AppState>) -> Json<ScanStatus> {
     Json(s.scan_manager.status().await)
-}
-#[derive(Default, Deserialize)]
-struct Since {
-    #[serde(default)]
-    since: u64,
-    token: Option<String>,
 }
 async fn scan_logs(_: Auth, State(s): State<AppState>, Query(q): Query<Since>) -> Json<Value> {
     let lines = s.scan_manager.logs_since(q.since).await;
