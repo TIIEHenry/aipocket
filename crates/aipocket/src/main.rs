@@ -235,65 +235,26 @@ async fn run_scan(
     let http = http_client(&settings)?;
     let scanner =
         aipocket_services::Scanner::new(Arc::new(settings.clone()), repository, http.clone());
-    let mut sources: Vec<Arc<dyn aipocket_discovery::DiscoverySource>> = Vec::new();
-    let registry = aipocket_discovery::packs::registry();
-    let mut fofa_queries = aipocket_discovery::legacy_queries::fofa_queries();
-    fofa_queries.extend(
-        registry
-            .values()
-            .flat_map(|p| p.fofa_queries)
-            .map(|q| q.to_string()),
+    let manual_targets = if source == "manual" {
+        scanner.manual_targets().await?
+    } else {
+        Vec::new()
+    };
+    let plan = aipocket_services::assemble_sources(
+        &settings,
+        &http,
+        &aipocket_services::AssembleParams {
+            requested: vec![source.clone()],
+            github_pack_ids: Vec::new(), // CLI 走全部 pack
+            manual_enrich: Vec::new(),
+            resume_run_id: resume.clone().unwrap_or_default(),
+            manual_targets,
+        },
     );
-    aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut fofa_queries);
-    let mut shodan_queries = registry
-        .values()
-        .flat_map(|p| p.shodan_queries)
-        .map(|q| q.to_string())
-        .collect();
-    aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut shodan_queries);
-    if source == "all" || source == "fofa" {
-        sources.push(Arc::new(aipocket_discovery::sources::FofaSource {
-            client: aipocket_clients::FofaClient::new(http.clone(), &settings),
-            queries: fofa_queries,
-            page_size: settings.fofa_page_size,
-            max_pages: settings.fofa_max_pages,
-            page_delay: settings.fofa_page_delay,
-        }));
+    for item in &plan.skipped {
+        tracing::warn!(source = %item.source, reason = %item.reason, "discovery source skipped");
     }
-    if source == "all" || source == "shodan" {
-        sources.push(Arc::new(aipocket_discovery::sources::ShodanSource {
-            client: aipocket_clients::ShodanClient::new(http.clone(), &settings),
-            queries: shodan_queries,
-            max_pages: settings.shodan_max_pages,
-            page_delay: settings.shodan_page_delay,
-        }));
-    }
-    if (source == "all" || source == "github")
-        && !settings.github_token_list().is_empty()
-        && settings.pg_enabled()
-    {
-        sources.push(Arc::new(aipocket_discovery::sources::GithubSource {
-            client: aipocket_clients::GithubClient::new(http.clone(), &settings),
-            queries: {
-                let mut queries = registry
-                    .values()
-                    .flat_map(|p| p.github_terms)
-                    .map(|q| q.to_string())
-                    .collect();
-                aipocket_discovery::legacy_queries::prioritize_fofa_queries(&mut queries);
-                queries
-            },
-            per_page: settings.github_search_page_size,
-            run_id: resume.clone().unwrap_or_default(),
-            pack_id: String::new(),
-        }));
-    }
-    if source == "manual" {
-        let targets = scanner.manual_targets().await?;
-        sources.push(Arc::new(aipocket_discovery::sources::ManualSource {
-            targets,
-        }));
-    }
+    let sources = plan.sources;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
