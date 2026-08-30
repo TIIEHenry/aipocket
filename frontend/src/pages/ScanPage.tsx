@@ -836,6 +836,13 @@ export function ScanConsole({
               验证进度在候选密钥产生后才会更新百分比；当前仍在发现阶段，请看下方实时日志中的「阶段 · …」行。
             </p>
           ) : null}
+          {status?.skipped_sources?.length ? (
+            <div className="mt-2 space-y-1 font-mono text-xs text-warning">
+              {status.skipped_sources.map((s) => (
+                <div key={s.source}>跳过 {s.source} · {s.reason}</div>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="flex min-h-[300px] flex-1 flex-col overflow-hidden rounded-md border border-border-primary bg-surface-inset sm:min-h-[360px]">

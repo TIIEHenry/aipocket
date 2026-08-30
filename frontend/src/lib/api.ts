@@ -147,6 +147,11 @@ export interface ScanProgress {
 
 export type ScanState = "idle" | "running" | "stopping" | "finished" | "interrupted"
 
+export interface SkippedSource {
+  source: string
+  reason: string
+}
+
 export interface ScanStatusResponse {
   state: ScanState | string
   source: string | null
@@ -162,6 +167,8 @@ export interface ScanStatusResponse {
   phase?: string
   error: string | null
   log_seq: number
+  /** Sources fail-closed at assembly time, e.g. github without token/PG. */
+  skipped_sources?: SkippedSource[]
 }
 
 export interface ScanLogLine {
