@@ -1,5 +1,5 @@
 use aipocket_core::{ScanProgress, Settings};
-use aipocket_db::{Repository, connect_pg, ensure_schema};
+use aipocket_db::{AuditEvent, Repository, connect_pg, ensure_schema};
 use chrono::Utc;
 use serde_json::json;
 
@@ -533,4 +533,34 @@ async fn repository_resume_append_balance_and_high_value_paths_persist() {
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL on TEST_DATABASE_URL"]
+async fn audit_events_list_newest_first_without_plaintext_key() {
+    let pool = connect_pg(&settings()).await.unwrap().unwrap();
+    ensure_schema(&pool).await.unwrap();
+    let repo = Repository::new(Some(pool));
+    let suffix = Utc::now().timestamp_nanos_opt().unwrap();
+    repo.insert_audit(&AuditEvent {
+        action: format!("reveal-old-{suffix}"),
+        client: "1.1.1.1".into(),
+        detail: json!({"masked": "sk-****abcd"}),
+    })
+    .await
+    .unwrap();
+    repo.insert_audit(&AuditEvent {
+        action: format!("reveal-new-{suffix}"),
+        client: "2.2.2.2".into(),
+        detail: json!({"masked": "sk-****wxyz"}),
+    })
+    .await
+    .unwrap();
+    let listed = repo.list_audit(1).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["action"], format!("reveal-new-{suffix}"));
+    assert_eq!(listed[0]["detail"]["masked"], "sk-****wxyz");
+    let serialized = listed[0]["detail"].to_string();
+    assert!(serialized.contains("masked"));
+    assert!(!serialized.contains("sk-plaintext"));
 }

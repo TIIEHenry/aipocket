@@ -23,6 +23,12 @@ pub struct Repository {
     pool: Option<Arc<PgPool>>,
 }
 
+pub struct AuditEvent {
+    pub action: String,
+    pub client: String,
+    pub detail: serde_json::Value,
+}
+
 pub struct BalancePersistence<'a> {
     pub result_id: Option<i64>,
     pub apikey: &'a str,
@@ -44,6 +50,42 @@ impl Repository {
     }
     fn require_pool(&self) -> Result<&PgPool> {
         self.pool().context("DATABASE_URL not configured")
+    }
+
+    pub async fn insert_audit(&self, event: &AuditEvent) -> Result<()> {
+        let Some(pool) = self.pool() else {
+            return Ok(());
+        };
+        sqlx::query("INSERT INTO audit_events (action, client, detail) VALUES ($1, $2, $3)")
+            .bind(&event.action)
+            .bind(&event.client)
+            .bind(&event.detail)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_audit(&self, limit: i64) -> Result<Vec<Value>> {
+        let Some(pool) = self.pool() else {
+            return Ok(Vec::new());
+        };
+        let rows = sqlx::query(
+            "SELECT id, at, action, client, detail FROM audit_events ORDER BY at DESC, id DESC LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(serde_json::json!({
+                    "id": row.try_get::<i64, _>("id")?,
+                    "at": row.try_get::<DateTime<Utc>, _>("at")?.to_rfc3339(),
+                    "action": row.try_get::<String, _>("action")?,
+                    "client": row.try_get::<String, _>("client")?,
+                    "detail": row.try_get::<Value, _>("detail")?,
+                }))
+            })
+            .collect()
     }
 
     pub async fn seed_cves(&self) -> Result<u64> {
@@ -1220,5 +1262,18 @@ mod tests {
     #[test]
     fn groups_run_day() {
         assert_eq!(run_day("run_2026_07_24_12-00-00"), "2026-07-24");
+    }
+
+    #[tokio::test]
+    async fn insert_audit_without_pool_is_ok_and_list_is_empty() {
+        let repo = Repository::default();
+        repo.insert_audit(&AuditEvent {
+            action: "reveal".into(),
+            client: "unknown".into(),
+            detail: serde_json::json!({"masked": "sk-****abcd"}),
+        })
+        .await
+        .unwrap();
+        assert!(repo.list_audit(10).await.unwrap().is_empty());
     }
 }

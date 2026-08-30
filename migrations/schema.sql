@@ -408,6 +408,15 @@ CREATE INDEX IF NOT EXISTS idx_manual_targets_host_key ON manual_targets (host_k
 -- Orphan recovery: UPDATE runs SET state='interrupted' WHERE state='running'
 CREATE INDEX IF NOT EXISTS idx_runs_state ON runs (state) WHERE state = 'running';
 
+CREATE TABLE IF NOT EXISTS audit_events (
+    id     BIGSERIAL PRIMARY KEY,
+    at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    action TEXT NOT NULL,
+    client TEXT NOT NULL,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS audit_events_at_desc ON audit_events (at DESC);
+
 -- ---------------------------------------------------------------------------
 -- Index rollout notes (VPS with existing data)
 -- ---------------------------------------------------------------------------
