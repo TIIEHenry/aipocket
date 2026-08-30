@@ -50,9 +50,9 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       # scanner.rs is intentionally covered (not ignored). Keep only binary assembly /
       # large generated route tables out of the denominator.
-      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info --ignore-filename-regex 'crates/aipocket/src/(main|maintenance)\.rs|crates/aipocket-api/src/routes\.rs' -- --include-ignored
+      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info --ignore-filename-regex 'crates/aipocket/src/(main|maintenance)\.rs' -- --include-ignored
       - name: Enforce >85% line coverage
-        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 86 --ignore-filename-regex 'crates/aipocket/src/(main|maintenance)\.rs|crates/aipocket-api/src/routes\.rs' -- --include-ignored
+        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 86 --ignore-filename-regex 'crates/aipocket/src/(main|maintenance)\.rs' -- --include-ignored
       - uses: actions/upload-artifact@v4
         with:
           name: rust-lcov

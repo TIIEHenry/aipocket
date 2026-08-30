@@ -366,3 +366,120 @@ async fn scan_status_exposes_skipped_sources_field() {
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert!(body["skipped_sources"].is_array());
 }
+
+async fn login_token(app: &axum::Router) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"password":"test-password"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    body["token"].as_str().unwrap().to_string()
+}
+
+async fn authed(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Option<&'static str>,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"));
+    let payload = if let Some(body) = body {
+        builder = builder.header("content-type", "application/json");
+        Body::from(body)
+    } else {
+        Body::empty()
+    };
+    let response = app
+        .clone()
+        .oneshot(builder.body(payload).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    (status, body)
+}
+
+#[tokio::test]
+async fn authenticated_resource_gets_return_ok() {
+    let app = app().await;
+    let token = login_token(&app).await;
+
+    for path in ["/api/runs", "/api/settings", "/api/scan/logs?since=0"] {
+        let (status, body) = authed(&app, "GET", path, &token, None).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    }
+
+    let (_, runs) = authed(&app, "GET", "/api/runs", &token, None).await;
+    assert!(runs["days"].is_array());
+
+    let (_, settings) = authed(&app, "GET", "/api/settings", &token, None).await;
+    assert!(settings.is_object());
+    assert!(settings.get("fofa_keys").is_some());
+
+    let (_, logs) = authed(&app, "GET", "/api/scan/logs?since=0", &token, None).await;
+    assert!(logs["lines"].is_array());
+    assert!(logs["last_seq"].is_number());
+
+    // These handlers still run without PG; Repository::require_pool maps to 500.
+    for path in [
+        "/api/keys/valid",
+        "/api/high-value",
+        "/api/cve",
+        "/api/honeypot",
+        "/api/manual-targets",
+    ] {
+        let (status, body) = authed(&app, "GET", path, &token, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {body}");
+        assert_eq!(body["error"]["code"], "internal_error");
+        assert!(body["error"]["message"].is_string());
+    }
+}
+
+#[tokio::test]
+async fn scan_start_github_without_token_skips_then_stop_succeeds() {
+    let app = app().await;
+    let token = login_token(&app).await;
+    let (status, body) = authed(
+        &app,
+        "POST",
+        "/api/scan/start",
+        &token,
+        Some(r#"{"source":"github"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let state = body["state"].as_str().unwrap_or_default();
+    assert!(matches!(state, "running" | "stopping"), "state={state}");
+    let skipped = body["skipped_sources"]
+        .as_array()
+        .expect("skipped_sources array");
+    assert!(
+        !skipped.is_empty() && skipped.iter().any(|item| item["source"] == "github"),
+        "{skipped:?}"
+    );
+
+    let (status, body) = authed(&app, "POST", "/api/scan/stop", &token, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn scan_stop_when_idle_conflicts() {
+    let app = app().await;
+    let token = login_token(&app).await;
+    let (status, body) = authed(&app, "POST", "/api/scan/stop", &token, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "conflict");
+}
