@@ -1,4 +1,6 @@
-use aipocket_core::{Credential, extract_recon_keys};
+use aipocket_core::{
+    CREDENTIAL_KIND_PROXY_SUB, Credential, extract_recon_keys, extract_subscription_urls,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -302,7 +304,42 @@ pub fn extract_artifact_text(
             line_end: None,
         });
     }
+    let base_host = subscription_base_host(endpoint);
+    for sub in extract_subscription_urls(text, &base_host, "") {
+        if !seen.insert(sub.apiurl.clone()) {
+            continue;
+        }
+        out.push(ExtractedArtifactSecret {
+            credential: Credential {
+                apikey: sub.token,
+                apiurl: sub.apiurl,
+                product: sub.product,
+                credential_kind: CREDENTIAL_KIND_PROXY_SUB.into(),
+                source: "github".into(),
+                source_type: source_kind.into(),
+                backend: "github".into(),
+                raw_context: text.chars().take(2048).collect(),
+                ..Default::default()
+            },
+            source_kind: source_kind.into(),
+            change_side: change_side.into(),
+            file_path: file_path.into(),
+            object_sha: object_sha.into(),
+            line_start: None,
+            line_end: None,
+        });
+    }
     out
+}
+
+fn subscription_base_host(endpoint: &str) -> String {
+    if endpoint.is_empty() {
+        return String::new();
+    }
+    url::Url::parse(endpoint)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 pub fn extract_patch(
     patch: &str,

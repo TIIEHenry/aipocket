@@ -7,7 +7,7 @@ import { ChatTestDialog } from "@/components/chat-test-dialog"
 import { KeyListToolbar, useKeyListView } from "@/components/key-list-filters"
 import { BulkBar, CenterState, IndexedKeyRow, KeyPagination, KeyTableHeader } from "@/components/key-table"
 import { useKeyTableSizing } from "@/components/key-table-columns"
-import { extractKeyFields, formatBalance, providerOf } from "@/components/key-record"
+import { extractKeyFields, formatBalance, providerOf, credentialKindLabel, isProxySubRecord } from "@/components/key-record"
 
 import { providerBrand, providerBrandColor } from "@/components/provider-badge"
 import { copyToClipboard } from "@/lib/utils"
@@ -140,9 +140,15 @@ export default function HighValuePage() {
   const handleCopy = useCallback(
     async (index: number) => {
       try {
-        const { apikey } = await ensureRevealed(index)
-        await copyToClipboard(apikey)
-        toast.success("已复制密钥到剪贴板")
+        const rec = stateRef.current.records[index]
+        const revealed = await ensureRevealed(index)
+        if (rec && isProxySubRecord(rec)) {
+          await copyToClipboard(revealed.apiurl)
+          toast.success("已复制订阅链接")
+        } else {
+          await copyToClipboard(revealed.apikey)
+          toast.success("已复制密钥到剪贴板")
+        }
       } catch (err) {
         toast.error("复制失败", { description: errorMessage(err, "剪贴板不可用") })
       }
@@ -380,10 +386,11 @@ export default function HighValuePage() {
   } else {
     body = (
       <div>
-        {pageRows.map(({ fields, status, originalIndex }) => {
+        {pageRows.map(({ fields, status, originalIndex, record }) => {
           const key = fields.maskedKey
           const reveal = revealed[key]
           const balanceInfo = balances[key]
+          const proxy = isProxySubRecord(record)
           return (
             <IndexedKeyRow
               key={`${key}:${originalIndex}`}
@@ -395,7 +402,7 @@ export default function HighValuePage() {
               provider={fields.provider}
               balance={balanceInfo?.balance ?? fields.balance}
               tier={balanceInfo?.tier ?? fields.tier}
-              credentialKind={fields.credentialKind}
+              credentialKind={fields.credentialKind ? credentialKindLabel(fields.credentialKind) : undefined}
               validationState={fields.validationState}
               scope={fields.scope}
               // After a live balance probe, drop stale scan-time evidence (e.g. "unknown").
@@ -413,9 +420,9 @@ export default function HighValuePage() {
               onExpandedChange={handleExpandedChange}
               onReveal={handleReveal}
               onCopy={handleCopy}
-              onLoadModels={loadModels}
-              onBalance={handleBalance}
-              onChat={openChat}
+              onLoadModels={proxy ? undefined : loadModels}
+              onBalance={proxy ? undefined : handleBalance}
+              onChat={proxy ? undefined : openChat}
               onMarkValid={status.label !== "可用" ? markValid : undefined}
               onMarkSuspicious={status.label !== "疑似" ? markSuspicious : undefined}
               onMarkUnavailable={status.label !== "不可用" ? markUnavailable : undefined}
@@ -464,6 +471,8 @@ export default function HighValuePage() {
         provider={listView.provider}
         onProviderChange={(value) => { listView.setProvider(value); changePage(1) }}
         providers={listView.providers}
+        credentialKind={listView.credentialKind}
+        onCredentialKindChange={(value) => { listView.setCredentialKind(value); changePage(1) }}
         balanceSort={listView.balanceSort}
         onBalanceSortChange={(value) => { listView.setBalanceSort(value); changePage(1) }}
         filteredCount={listView.filteredCount}

@@ -34,6 +34,8 @@ pub struct Credential {
     pub raw_context: String,
     pub leak_host: String,
     pub routed_to_official: bool,
+    /// `""` = AI API key; `proxy_sub` = airport Clash subscription URL.
+    pub credential_kind: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

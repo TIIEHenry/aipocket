@@ -105,6 +105,8 @@ function ExportMenu({ onExport, disabled, exporting, label = "导出" }: Readonl
         <SelectItem value="json">JSON</SelectItem>
         <SelectItem value="csv">CSV</SelectItem>
         <SelectItem value="sub2api">Sub2API</SelectItem>
+        <SelectItem value="subscription-url">订阅链接</SelectItem>
+        <SelectItem value="clash-body">Clash 配置体</SelectItem>
       </SelectContent>
     </Select>
   )

@@ -1,4 +1,5 @@
 pub mod capability;
+pub mod clash_subscription;
 pub mod engine;
 pub mod engines;
 pub mod migrated_specs;

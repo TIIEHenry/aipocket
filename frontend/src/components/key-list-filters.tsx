@@ -1,9 +1,11 @@
 import { useCallback, useDeferredValue, useMemo, useState } from "react"
 import { ArrowDownWideNarrow, ArrowUpNarrowWide, ListFilter, Search, X } from "lucide-react"
-import type { KeyRecord } from "@/lib/api"
+import type { CredentialKindFilter, KeyRecord } from "@/lib/api"
 import {
+  credentialKindLabel,
   deriveKeyStatus,
   extractKeyFields,
+  isProxySubRecord,
   providerOf,
   type KeyFields,
 } from "@/components/key-record"
@@ -115,6 +117,7 @@ export function useKeyListView(
 ) {
   const [search, setSearch] = useState("")
   const [provider, setProvider] = useState<string>("all")
+  const [credentialKind, setCredentialKind] = useState<CredentialKindFilter>("all")
   const [balanceSort, setBalanceSort] = useState<BalanceSort>("none")
   const deferredSearch = useDeferredValue(search)
 
@@ -148,6 +151,12 @@ export function useKeyListView(
       items = items.filter((row) => (row.fields.provider ?? "unknown") === activeProvider)
     }
 
+    if (credentialKind === "proxy_sub") {
+      items = items.filter((row) => isProxySubRecord(row.record))
+    } else if (credentialKind === "ai") {
+      items = items.filter((row) => !isProxySubRecord(row.record))
+    }
+
     if (needle) {
       items = items.filter((row) => matchesSearch(row, needle))
     }
@@ -167,14 +176,18 @@ export function useKeyListView(
     }
 
     return items
-  }, [records, deferredSearch, activeProvider, balanceSort, balanceOverrides])
+  }, [records, deferredSearch, activeProvider, credentialKind, balanceSort, balanceOverrides])
 
   const hasActiveFilters =
-    search.trim().length > 0 || activeProvider !== "all" || balanceSort !== "none"
+    search.trim().length > 0 ||
+    activeProvider !== "all" ||
+    credentialKind !== "all" ||
+    balanceSort !== "none"
 
   const clearFilters = useCallback(() => {
     setSearch("")
     setProvider("all")
+    setCredentialKind("all")
     setBalanceSort("none")
   }, [])
 
@@ -183,6 +196,8 @@ export function useKeyListView(
     setSearch,
     provider: activeProvider,
     setProvider,
+    credentialKind,
+    setCredentialKind,
     balanceSort,
     setBalanceSort,
     providers,
@@ -200,6 +215,8 @@ export interface KeyListToolbarProps {
   provider: string
   onProviderChange: (value: string) => void
   providers: ReadonlyArray<readonly [string, number]>
+  credentialKind: CredentialKindFilter
+  onCredentialKindChange: (value: CredentialKindFilter) => void
   balanceSort: BalanceSort
   onBalanceSortChange: (value: BalanceSort) => void
   filteredCount: number
@@ -216,6 +233,8 @@ export function KeyListToolbar({
   provider,
   onProviderChange,
   providers,
+  credentialKind,
+  onCredentialKindChange,
   balanceSort,
   onBalanceSortChange,
   filteredCount,
@@ -262,6 +281,22 @@ export function KeyListToolbar({
               </SelectItem>
             )
           })}
+        </SelectContent>
+      </Select>
+
+      <Select value={credentialKind} onValueChange={(v) => onCredentialKindChange(v as CredentialKindFilter)}>
+        <SelectTrigger
+          size="sm"
+          className="h-11 flex-1 border-border-primary bg-surface-raised font-sans text-[13px] text-text-secondary dark:bg-surface-raised sm:h-8 sm:min-w-[140px] sm:flex-none"
+          aria-label="按类型筛选"
+        >
+          <ListFilter className="size-3.5 text-text-muted" />
+          <SelectValue placeholder="全部类型" />
+        </SelectTrigger>
+        <SelectContent align="start" position="popper">
+          <SelectItem value="all">全部类型</SelectItem>
+          <SelectItem value="ai">AI 密钥</SelectItem>
+          <SelectItem value="proxy_sub">{credentialKindLabel("proxy_sub")}</SelectItem>
         </SelectContent>
       </Select>
 

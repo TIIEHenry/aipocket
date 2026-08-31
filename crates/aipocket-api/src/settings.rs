@@ -24,6 +24,12 @@ pub struct SettingsView {
     pub shodan_query_budget: usize,
     pub validate_concurrency: usize,
     pub prober_concurrency: usize,
+    pub proxy_sub_enabled: bool,
+    pub proxy_sub_query_budget: usize,
+    pub proxy_sub_validate_enabled: bool,
+    pub proxy_sub_insecure_tls: bool,
+    pub proxy_sub_fofa_body: bool,
+    pub proxy_sub_extra_packs: String,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct SettingsUpdate {
@@ -46,6 +52,12 @@ pub struct SettingsUpdate {
     pub shodan_query_budget: Option<usize>,
     pub validate_concurrency: Option<usize>,
     pub prober_concurrency: Option<usize>,
+    pub proxy_sub_enabled: Option<bool>,
+    pub proxy_sub_query_budget: Option<usize>,
+    pub proxy_sub_validate_enabled: Option<bool>,
+    pub proxy_sub_insecure_tls: Option<bool>,
+    pub proxy_sub_fofa_body: Option<bool>,
+    pub proxy_sub_extra_packs: Option<String>,
 }
 impl SettingsView {
     pub fn from_settings(s: &Settings) -> Self {
@@ -69,6 +81,12 @@ impl SettingsView {
             shodan_query_budget: s.shodan_query_budget,
             validate_concurrency: s.validate_concurrency,
             prober_concurrency: s.prober_concurrency,
+            proxy_sub_enabled: s.proxy_sub_enabled,
+            proxy_sub_query_budget: s.proxy_sub_query_budget,
+            proxy_sub_validate_enabled: s.proxy_sub_validate_enabled,
+            proxy_sub_insecure_tls: s.proxy_sub_insecure_tls,
+            proxy_sub_fofa_body: s.proxy_sub_fofa_body,
+            proxy_sub_extra_packs: s.proxy_sub_extra_packs.clone(),
         }
     }
 }
@@ -110,6 +128,12 @@ impl SettingsUpdate {
         put!(shodan_query_budget, "SHODAN_QUERY_BUDGET");
         put!(validate_concurrency, "VALIDATE_CONCURRENCY");
         put!(prober_concurrency, "PROBER_CONCURRENCY");
+        put!(proxy_sub_enabled, "PROXY_SUB_ENABLED");
+        put!(proxy_sub_query_budget, "PROXY_SUB_QUERY_BUDGET");
+        put!(proxy_sub_validate_enabled, "PROXY_SUB_VALIDATE_ENABLED");
+        put!(proxy_sub_insecure_tls, "PROXY_SUB_INSECURE_TLS");
+        put!(proxy_sub_fofa_body, "PROXY_SUB_FOFA_BODY");
+        put!(proxy_sub_extra_packs, "PROXY_SUB_EXTRA_PACKS");
         out
     }
 }

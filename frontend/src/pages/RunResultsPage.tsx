@@ -14,7 +14,7 @@ import { ChatTestDialog } from "@/components/chat-test-dialog"
 import { KeyListToolbar, useKeyListView } from "@/components/key-list-filters"
 import { BulkBar, CenterState, IndexedKeyRow, KeyPagination, KeyTableHeader } from "@/components/key-table"
 import { useKeyTableSizing } from "@/components/key-table-columns"
-import { extractKeyFields, formatBalance } from "@/components/key-record"
+import { extractKeyFields, formatBalance, credentialKindLabel, isProxySubRecord, parseRevealResponse } from "@/components/key-record"
 import { Button } from "@/components/ui/button"
 import { RunLogDialog } from "@/components/run-log-dialog"
 import { cn, copyToClipboard } from "@/lib/utils"
@@ -142,8 +142,13 @@ export default function RunResultsPage() {
   // change identity every render); depending on these keeps the row callbacks
   // stable so the memoized `IndexedKeyRow`s don't all re-render on any change.
   const { mutateAsync: revealAsync } = useMutation({
-    mutationFn: (vars: { kind: ResultKind; index: number }) =>
-      api.keyReveal({ run_id: runId!, kind: vars.kind, index: vars.index }),
+    mutationFn: (vars: { kind: ResultKind; index: number; resultId?: number }) =>
+      api.keyReveal({
+        run_id: runId!,
+        kind: vars.kind,
+        index: vars.index,
+        result_id: vars.resultId,
+      }),
   })
   const { mutateAsync: modelsAsync } = useMutation({ mutationFn: api.keyModels })
   const { mutateAsync: balanceAsync } = useMutation({ mutationFn: api.keyBalance })
@@ -159,9 +164,11 @@ export default function RunResultsPage() {
       const key = rowKeyOf(activeKind, index)
       const cached = cache[key]
       if (cached) return cached
-      const fields = extractKeyFields(recs[index])
-      const res = await revealAsync({ kind: activeKind, index })
-      const value: Revealed = { apikey: res.apikey, apiurl: res.apiurl || fields.apiurl || "" }
+      const rec = recs[index]
+      const fields = extractKeyFields(rec)
+      const resultId = typeof rec?.result_id === "number" ? rec.result_id : undefined
+      const res = await revealAsync({ kind: activeKind, index, resultId })
+      const value: Revealed = parseRevealResponse(res, fields.apiurl)
       setRevealed((prev) => ({ ...prev, [key]: value }))
       return value
     },
@@ -185,9 +192,15 @@ export default function RunResultsPage() {
   const handleCopy = useCallback(
     async (index: number) => {
       try {
-        const { apikey } = await ensureRevealed(index)
-        await copyToClipboard(apikey)
-        toast.success("已复制密钥到剪贴板")
+        const rec = stateRef.current.records[index]
+        const revealed = await ensureRevealed(index)
+        if (rec && isProxySubRecord(rec)) {
+          await copyToClipboard(revealed.apiurl)
+          toast.success("已复制订阅链接")
+        } else {
+          await copyToClipboard(revealed.apikey)
+          toast.success("已复制密钥到剪贴板")
+        }
       } catch (err) {
         toast.error("复制失败", { description: errorMessage(err, "剪贴板不可用") })
       }
@@ -503,10 +516,11 @@ export default function RunResultsPage() {
   } else {
     body = (
       <div>
-        {pageRows.map(({ fields, status, originalIndex }) => {
+        {pageRows.map(({ fields, status, originalIndex, record }) => {
           const key = rowKeyOf(kind, originalIndex)
           const reveal = revealed[key]
           const balanceInfo = balances[key]
+          const proxy = isProxySubRecord(record)
           return (
             <IndexedKeyRow
               key={key}
@@ -518,7 +532,7 @@ export default function RunResultsPage() {
               provider={fields.provider}
               balance={balanceInfo?.balance ?? fields.balance}
               tier={balanceInfo?.tier ?? fields.tier}
-              credentialKind={fields.credentialKind}
+              credentialKind={fields.credentialKind ? credentialKindLabel(fields.credentialKind) : undefined}
               validationState={fields.validationState}
               scope={fields.scope}
               tierEvidence={balanceInfo ? undefined : fields.tierEvidence}
@@ -535,9 +549,9 @@ export default function RunResultsPage() {
               onExpandedChange={handleExpandedChange}
               onReveal={handleReveal}
               onCopy={handleCopy}
-              onLoadModels={loadModels}
-              onBalance={handleBalance}
-              onChat={openChat}
+              onLoadModels={proxy ? undefined : loadModels}
+              onBalance={proxy ? undefined : handleBalance}
+              onChat={proxy ? undefined : openChat}
             />
           )
         })}
@@ -634,6 +648,8 @@ export default function RunResultsPage() {
         provider={listView.provider}
         onProviderChange={(value) => { listView.setProvider(value); setPage(1); setSelected(new Set()) }}
         providers={listView.providers}
+        credentialKind={listView.credentialKind}
+        onCredentialKindChange={(value) => { listView.setCredentialKind(value); setPage(1); setSelected(new Set()) }}
         balanceSort={listView.balanceSort}
         onBalanceSortChange={(value) => { listView.setBalanceSort(value); setPage(1); setSelected(new Set()) }}
         filteredCount={listView.filteredCount}

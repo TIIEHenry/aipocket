@@ -170,7 +170,10 @@ impl Analyzer {
         let batches = results
             .iter()
             .enumerate()
-            .filter_map(|(index, result)| result.valid.then_some(index))
+            .filter_map(|(index, result)| {
+                (result.valid && !aipocket_core::is_proxy_sub_credential(&result.credential))
+                    .then_some(index)
+            })
             .collect::<Vec<_>>()
             .chunks(self.settings.gpt_recheck_batch_size.max(1))
             .map(<[usize]>::to_vec)

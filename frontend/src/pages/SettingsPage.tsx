@@ -20,9 +20,16 @@ import {
   type ShodanCheckResponse,
 } from "@/lib/api"
 import { Field } from "@/components/field"
+import { ExperimentalProxyPacksPanel } from "@/components/experimental-proxy-packs-panel"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import {
+  parseExperimentalProxyPacks,
+  serializeExperimentalProxyPacks,
+  type ExperimentalProxyPackId,
+} from "@/lib/experimental-proxy-packs"
 
 interface FormState {
   fofa_keys: string
@@ -36,8 +43,20 @@ interface FormState {
   github_api_base_url: string
   tavily_key: string
   tavily_base_url: string
+  proxy_sub_enabled: boolean
+  proxy_sub_query_budget: number
+  proxy_sub_validate_enabled: boolean
+  proxy_sub_insecure_tls: boolean
+  proxy_sub_fofa_body: boolean
+  proxy_sub_extra_packs: string
 }
 
+const BOOL_FIELDS = [
+  "proxy_sub_enabled",
+  "proxy_sub_validate_enabled",
+  "proxy_sub_insecure_tls",
+  "proxy_sub_fofa_body",
+] as const
 const STRING_FIELDS = [
   "fofa_keys",
   "fofa_base_url",
@@ -47,8 +66,9 @@ const STRING_FIELDS = [
   "github_api_base_url",
   "tavily_key",
   "tavily_base_url",
+  "proxy_sub_extra_packs",
 ] as const
-const NUMBER_FIELDS = ["fofa_query_budget", "fofa_max_pages", "shodan_query_budget"] as const
+const NUMBER_FIELDS = ["fofa_query_budget", "fofa_max_pages", "shodan_query_budget", "proxy_sub_query_budget"] as const
 const SENSITIVE = new Set<keyof FormState>(["fofa_keys", "shodan_keys", "github_tokens", "tavily_key"])
 
 function pickForm(view: SettingsView): FormState {
@@ -64,6 +84,12 @@ function pickForm(view: SettingsView): FormState {
     github_api_base_url: view.github_api_base_url ?? "",
     tavily_key: view.tavily_key ?? "",
     tavily_base_url: view.tavily_base_url ?? "",
+    proxy_sub_enabled: view.proxy_sub_enabled ?? false,
+    proxy_sub_query_budget: view.proxy_sub_query_budget ?? 8,
+    proxy_sub_validate_enabled: view.proxy_sub_validate_enabled ?? true,
+    proxy_sub_insecure_tls: view.proxy_sub_insecure_tls ?? false,
+    proxy_sub_fofa_body: view.proxy_sub_fofa_body ?? false,
+    proxy_sub_extra_packs: view.proxy_sub_extra_packs ?? "",
   }
 }
 
@@ -76,6 +102,11 @@ function buildUpdate(form: FormState, baseline: FormState): SettingsUpdate {
     update[field] = value
   }
   for (const field of NUMBER_FIELDS) {
+    const value = form[field]
+    if (value === baseline[field]) continue
+    update[field] = value
+  }
+  for (const field of BOOL_FIELDS) {
     const value = form[field]
     if (value === baseline[field]) continue
     update[field] = value
@@ -558,6 +589,98 @@ function SettingsForm({ initial }: Readonly<{ initial: SettingsView }>) {
               data={tavilyCheck.data}
               error={tavilyCheck.error}
             />
+          </section>
+
+          <section className="flex flex-col gap-4 rounded-md border border-border-primary bg-surface-raised p-4 sm:gap-[18px] sm:p-6">
+            <div className="flex items-center gap-2.5">
+              <span className="size-2.5 rounded-full bg-warning" />
+              <h2 className="text-base font-semibold text-text-primary">机场订阅发现（Clash）</h2>
+            </div>
+            <p className="font-mono text-[11px] leading-relaxed text-text-muted">
+              默认关闭。开启后追加 proxy FOFA/Shodan 查询并提取完整订阅 URL；验证阶段会对目标面板发起 GET（可能触发 last-used）。
+            </p>
+
+            <label className="flex items-center gap-2.5 font-sans text-[13px] text-text-secondary">
+              <Checkbox
+                checked={form.proxy_sub_enabled}
+                onCheckedChange={(checked) =>
+                  setForm((prev) => ({ ...prev, proxy_sub_enabled: checked === true }))
+                }
+              />
+              PROXY_SUB_ENABLED
+            </label>
+
+            <div
+              className={cn(
+                "flex flex-col gap-4 transition-opacity",
+                !form.proxy_sub_enabled && "pointer-events-none opacity-45",
+              )}
+            >
+              <Field
+                label="PROXY_SUB_QUERY_BUDGET"
+                htmlFor="proxy-sub-budget"
+                hint="追加到 FOFA/Shodan 的 proxy 查询条数上限"
+              >
+                <Input
+                  id="proxy-sub-budget"
+                  type="number"
+                  min={1}
+                  disabled={!form.proxy_sub_enabled}
+                  value={form.proxy_sub_query_budget}
+                  onChange={setNumberField("proxy_sub_query_budget")}
+                  className="border-border-primary bg-surface-inset font-mono text-[13px] dark:bg-surface-inset"
+                />
+              </Field>
+
+              <label className="flex items-center gap-2.5 font-sans text-[13px] text-text-secondary">
+                <Checkbox
+                  checked={form.proxy_sub_validate_enabled}
+                  disabled={!form.proxy_sub_enabled}
+                  onCheckedChange={(checked) =>
+                    setForm((prev) => ({ ...prev, proxy_sub_validate_enabled: checked === true }))
+                  }
+                />
+                PROXY_SUB_VALIDATE_ENABLED（关闭则仅提取、不 GET 验证）
+              </label>
+
+              <label className="flex items-center gap-2.5 font-sans text-[13px] text-text-secondary">
+                <Checkbox
+                  checked={form.proxy_sub_insecure_tls}
+                  disabled={!form.proxy_sub_enabled}
+                  onCheckedChange={(checked) =>
+                    setForm((prev) => ({ ...prev, proxy_sub_insecure_tls: checked === true }))
+                  }
+                />
+                PROXY_SUB_INSECURE_TLS（接受无效证书，仅研究环境）
+              </label>
+
+              <label className="flex items-center gap-2.5 font-sans text-[13px] text-text-secondary">
+                <Checkbox
+                  checked={form.proxy_sub_fofa_body}
+                  disabled={!form.proxy_sub_enabled}
+                  onCheckedChange={(checked) =>
+                    setForm((prev) => ({ ...prev, proxy_sub_fofa_body: checked === true }))
+                  }
+                />
+                PROXY_SUB_FOFA_BODY（FOFA 请求追加 body 字段，配额更高）
+              </label>
+
+              {form.proxy_sub_enabled ? (
+                <ExperimentalProxyPacksPanel
+                  value={parseExperimentalProxyPacks(form.proxy_sub_extra_packs)}
+                  onChange={(ids: ExperimentalProxyPackId[]) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      proxy_sub_extra_packs: serializeExperimentalProxyPacks(ids),
+                    }))
+                  }
+                />
+              ) : (
+                <p className="rounded-md border border-dashed border-border-primary bg-surface-inset px-3 py-2.5 font-mono text-[11px] text-text-muted">
+                  开启 PROXY_SUB_ENABLED 后可配置实验性机场 pack（哪吒 / Wings / MQPanel / 节点 URI）。
+                </p>
+              )}
+            </div>
           </section>
         </div>
       </div>

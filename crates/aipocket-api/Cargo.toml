@@ -11,6 +11,7 @@ aipocket-core = { path = "../aipocket-core" }
 aipocket-db = { path = "../aipocket-db" }
 aipocket-discovery = { path = "../aipocket-discovery" }
 aipocket-services = { path = "../aipocket-services" }
+aipocket-prober = { path = "../aipocket-prober" }
 anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true

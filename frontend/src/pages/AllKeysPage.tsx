@@ -13,7 +13,7 @@ import { ChatTestDialog } from "@/components/chat-test-dialog"
 import { KeyListToolbar, useKeyListView } from "@/components/key-list-filters"
 import { BulkBar, CenterState, IndexedKeyRow, KeyPagination, KeyTableHeader } from "@/components/key-table"
 import { useKeyTableSizing } from "@/components/key-table-columns"
-import { extractKeyFields, formatBalance } from "@/components/key-record"
+import { extractKeyFields, formatBalance, credentialKindLabel, isProxySubRecord, parseRevealResponse } from "@/components/key-record"
 import { applyBatchBalanceResults } from "@/lib/batch-balance"
 import { cn, copyToClipboard } from "@/lib/utils"
 
@@ -93,14 +93,15 @@ export default function AllKeysPage() {
       index: number
       runId: string
       sourceIndex: number
+      resultId?: number
       masked?: string
       apiurl?: string
     }) =>
       api.keyReveal({
         run_id: vars.runId,
         kind: vars.kind,
+        result_id: vars.resultId,
         index: vars.sourceIndex,
-        // Also send masked so the server can recover if source_index is a stale seq.
         masked: vars.masked,
         apiurl: vars.apiurl,
       }),
@@ -166,15 +167,17 @@ export default function AllKeysPage() {
       const runId = typeof rec.source_run_id === "string" ? rec.source_run_id : ""
       const sourceIndex = typeof rec.source_index === "number" ? rec.source_index : index
       if (!runId) throw new Error("missing source_run_id")
+      const resultId = typeof rec.result_id === "number" ? rec.result_id : undefined
       const res = await revealAsync({
         kind: activeKind,
         index,
         runId,
         sourceIndex,
+        resultId,
         masked: fields.maskedKey !== "—" ? fields.maskedKey : undefined,
         apiurl: fields.apiurl,
       })
-      const value: Revealed = { apikey: res.apikey, apiurl: res.apiurl || fields.apiurl || "" }
+      const value: Revealed = parseRevealResponse(res, fields.apiurl)
       setRevealed((prev) => ({ ...prev, [key]: value }))
       return value
     },
@@ -198,9 +201,15 @@ export default function AllKeysPage() {
   const handleCopy = useCallback(
     async (index: number) => {
       try {
-        const { apikey } = await ensureRevealed(index)
-        await copyToClipboard(apikey)
-        toast.success("已复制密钥到剪贴板")
+        const rec = stateRef.current.records[index]
+        const revealed = await ensureRevealed(index)
+        if (rec && isProxySubRecord(rec)) {
+          await copyToClipboard(revealed.apiurl)
+          toast.success("已复制订阅链接")
+        } else {
+          await copyToClipboard(revealed.apikey)
+          toast.success("已复制密钥到剪贴板")
+        }
       } catch (err) {
         toast.error("复制失败", { description: errorMessage(err, "剪贴板不可用") })
       }
@@ -413,7 +422,11 @@ export default function AllKeysPage() {
     const { records: recs, kind: activeKind } = stateRef.current
     try {
       await api.export({ dataset: "all", format, kind: activeKind })
-      toast.success(`已导出全部 ${recs.length} 个密钥`)
+      toast.success(
+        format === "subscription-url"
+          ? `已导出订阅链接（${recs.length} 条筛选范围内）`
+          : `已导出全部 ${recs.length} 个密钥`,
+      )
     } catch (err) {
       toast.error("导出失败", { description: errorMessage(err, "无法生成导出文件") })
     } finally {
@@ -491,10 +504,11 @@ export default function AllKeysPage() {
   } else {
     body = (
       <div>
-        {pageRows.map(({ fields, status, originalIndex }) => {
+        {pageRows.map(({ fields, status, originalIndex, record }) => {
           const key = rowKeyOf(kind, originalIndex)
           const reveal = revealed[key]
           const balanceInfo = balances[key]
+          const proxy = isProxySubRecord(record)
           return (
             <IndexedKeyRow
               onMarkValid={kind === "suspicious" || kind === "unavailable" ? markRowValid : undefined}
@@ -510,7 +524,7 @@ export default function AllKeysPage() {
               provider={fields.provider}
               balance={balanceInfo?.balance ?? fields.balance}
               tier={balanceInfo?.tier ?? fields.tier}
-              credentialKind={fields.credentialKind}
+              credentialKind={fields.credentialKind ? credentialKindLabel(fields.credentialKind) : undefined}
               validationState={fields.validationState}
               scope={fields.scope}
               tierEvidence={balanceInfo ? undefined : fields.tierEvidence}
@@ -526,9 +540,9 @@ export default function AllKeysPage() {
               onExpandedChange={handleExpandedChange}
               onReveal={handleReveal}
               onCopy={handleCopy}
-              onLoadModels={loadModels}
-              onBalance={handleBalance}
-              onChat={openChat}
+              onLoadModels={proxy ? undefined : loadModels}
+              onBalance={proxy ? undefined : handleBalance}
+              onChat={proxy ? undefined : openChat}
               actionWidth={actionWidth}
             />
           )
@@ -585,6 +599,8 @@ export default function AllKeysPage() {
         provider={listView.provider}
         onProviderChange={(value) => { listView.setProvider(value); changePage(1) }}
         providers={listView.providers}
+        credentialKind={listView.credentialKind}
+        onCredentialKindChange={(value) => { listView.setCredentialKind(value); changePage(1) }}
         balanceSort={listView.balanceSort}
         onBalanceSortChange={(value) => { listView.setBalanceSort(value); changePage(1) }}
         filteredCount={listView.filteredCount}

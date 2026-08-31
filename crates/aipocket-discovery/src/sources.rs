@@ -12,6 +12,20 @@ pub const FOFA_FIELDS: &[&str] = &[
     "domain", "cert",
 ];
 
+pub const FOFA_FIELDS_WITH_BODY: &[&str] = &[
+    "host", "ip", "port", "protocol", "title", "header", "banner", "server", "product", "link",
+    "domain", "cert", "body",
+];
+
+pub fn fofa_fields_for_row(row: &Value) -> &'static [&'static str] {
+    if let Value::Array(items) = row
+        && items.len() == FOFA_FIELDS_WITH_BODY.len()
+    {
+        return FOFA_FIELDS_WITH_BODY;
+    }
+    FOFA_FIELDS
+}
+
 fn value_text(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -31,8 +45,9 @@ pub fn normalize_fofa_row(row: &Value) -> Value {
     let mut out = match row {
         Value::Object(map) => Value::Object(map.clone()),
         Value::Array(items) => {
-            let mut map = serde_json::Map::with_capacity(FOFA_FIELDS.len());
-            for (i, name) in FOFA_FIELDS.iter().enumerate() {
+            let field_names = fofa_fields_for_row(row);
+            let mut map = serde_json::Map::with_capacity(field_names.len());
+            for (i, name) in field_names.iter().enumerate() {
                 map.insert(
                     (*name).to_owned(),
                     items
@@ -919,6 +934,18 @@ mod tests {
         let row = json!({"host": "h", "body": "BANNER_BODY", "header": "H"});
         let hit = normalize_fofa_row(&row);
         assert_eq!(hit["banner"], "BANNER_BODY");
+    }
+
+    #[test]
+    fn fofa_array_row_with_body_field() {
+        let row = json!([
+            "h.example", "1.2.3.4", "443", "https", "t", "hdr", "ban", "srv", "prod", "lnk",
+            "dom", "cert", "BODY_TEXT"
+        ]);
+        let hit = normalize_fofa_row(&row);
+        assert_eq!(hit["host"], "h.example");
+        assert_eq!(hit["body"], "BODY_TEXT");
+        assert_eq!(hit["banner"], "ban");
     }
 
     #[tokio::test]

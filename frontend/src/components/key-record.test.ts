@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { deriveKeyStatus, extractKeyFields } from "@/components/key-record"
+import { deriveKeyStatus, extractKeyFields, isProxySubRecord } from "@/components/key-record"
 import { providerBrand } from "@/components/provider-badge"
 import { applyBatchBalanceResults } from "@/lib/batch-balance"
 import type { BatchBalanceResponse, KeyRecord } from "@/lib/api"
@@ -50,10 +50,18 @@ describe("key display fields", () => {
     )
   })
 
-  it("extracts high-value saved_at independently", () => {
-    expect(extractKeyFields(record({ saved_at: "2026-07-22T02:00:00Z" })).savedAt).toBe(
-      "2026-07-22T02:00:00Z",
+  it("reads credential_kind from nested credential", () => {
+    const fields = extractKeyFields(
+      record({
+        credential: {
+          ...record().credential,
+          credential_kind: "proxy_sub",
+          apiurl: "https://panel.test/api/v1/client/subscribe?token=ab****cd",
+        },
+      }),
     )
+    expect(fields.credentialKind).toBe("proxy_sub")
+    expect(isProxySubRecord(record({ credential_kind: "proxy_sub" }))).toBe(true)
   })
 
   it("keeps provider evidence when cash balance is unavailable", () => {

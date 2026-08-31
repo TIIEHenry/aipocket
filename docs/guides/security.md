@@ -2,8 +2,8 @@
 title: "安全边界"
 type: guide
 status: current
-updated: 2026-08-30
-summary: "授权范围、探测风险门控、以及会消耗目标额度的 Web 操作"
+updated: 2026-08-31
+summary: "授权范围、探测门控、reveal/chat 风险，以及 proxy_sub 出站 GET"
 ---
 
 # 安全边界
@@ -34,8 +34,12 @@ v1 只处理响应中明确为公开的仓库。缺少 token 或 `DATABASE_URL` 
 | `POST /api/key/chat` | 用目标 key 发推理请求，**必须显式传 `model`** |
 | `POST /api/key/balance`、批量 balance | 访问提供商余额接口，可能计入配额 |
 | reveal | 列表默认打码；`POST /api/key/reveal` 与 high-value reveal 返回明文 |
+| `PROXY_SUB_VALIDATE_ENABLED=true` 扫描 | 对泄露的机场订阅 URL 发起 **GET**（Clash UA），可能触发面板 last-used；仅授权目标 |
+| `format=clash-body` 导出 | 对每条 `proxy_sub` **再次 GET** 订阅 URL 拉取配置体；审计 action `export_clash_body`（非通用 `export`） |
 
-导出、截图、日志不要把明文密钥提交进 git。reveal / chat / export / restart 会写审计，detail 只有打码与元数据，见 [ADR-004](../../dev/decisions/004-readiness-and-audit.md)。
+`credential_kind=proxy_sub` 的记录：**禁止** balance / chat / models（API 返回 400）。导出 `sub2api` 自动排除；`subscription-url` 为每行完整订阅链；`clash-body` 为实时拉取的 YAML/base64 配置片段（均需审计）。
+
+导出、截图、日志不要把明文密钥或订阅 URL 提交进 git。reveal / chat / export / restart 会写审计，detail 只有打码与元数据，见 [ADR-004](../../dev/decisions/004-readiness-and-audit.md)。
 
 ## 鉴权
 

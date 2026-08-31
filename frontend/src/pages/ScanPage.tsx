@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link } from "react-router-dom"
 import {
   Check,
   ChevronDown,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { Checkbox } from "@/components/ui/checkbox"
+import { ExperimentalProxyPacksPanel } from "@/components/experimental-proxy-packs-panel"
 import * as PopoverPrimitive from "@radix-ui/react-popover"
 
 import {
@@ -42,6 +44,11 @@ import {
   toggleAllSources,
   toggleSource as toggleSourceSelection,
 } from "@/lib/scan-sources"
+import {
+  parseExperimentalProxyPacks,
+  serializeExperimentalProxyPacks,
+  type ExperimentalProxyPackId,
+} from "@/lib/experimental-proxy-packs"
 
 const MAX_LINES = 200
 const POLL_MS = 2000
@@ -196,6 +203,10 @@ export function ScanConsole({
     "cursor",
   ])
   const [packDropdownOpen, setPackDropdownOpen] = useState(false)
+  /** Overrides settings `PROXY_SUB_EXTRA_PACKS` until next settings fetch. */
+  const [experimentalPacksOverride, setExperimentalPacksOverride] = useState<
+    ExperimentalProxyPackId[] | null
+  >(null)
   /** Custom hunt: reverse-lookup hostnames on FOFA/Shodan for product fingerprints. */
   const [manualEnrich, setManualEnrich] = useState<ManualEnrichEngine[]>(readManualEnrich)
   const [lines, setLines] = useState<ScanLogLine[]>([])
@@ -225,6 +236,17 @@ export function ScanConsole({
     queryFn: () => api.scanStatus(),
     refetchInterval: (query) => (isActive(query.state.data?.state) ? 1500 : false),
   })
+
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.getSettings(),
+  })
+
+  const savedExperimentalPacks = useMemo(
+    () => parseExperimentalProxyPacks(settingsQuery.data?.proxy_sub_extra_packs),
+    [settingsQuery.data?.proxy_sub_extra_packs],
+  )
+  const experimentalPacks = experimentalPacksOverride ?? savedExperimentalPacks
 
   const status = statusQuery.data
   const state = status?.state
@@ -375,22 +397,45 @@ export function ScanConsole({
     )
   }, [])
 
+  const includesDiscoveryForProxy =
+    launchSources.includes("fofa") ||
+    launchSources.includes("shodan") ||
+    launchSources.includes("github")
+  const proxySubEnabled = settingsQuery.data?.proxy_sub_enabled === true
+  const showExperimentalProxyPanel = includesDiscoveryForProxy && proxySubEnabled
+  const experimentalPacksDirty = useMemo(() => {
+    if (!proxySubEnabled) return false
+    return (
+      serializeExperimentalProxyPacks(experimentalPacks) !==
+      (settingsQuery.data?.proxy_sub_extra_packs ?? "")
+    )
+  }, [experimentalPacks, proxySubEnabled, settingsQuery.data?.proxy_sub_extra_packs])
+
   const startMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (launchSources.length === 0) {
-        return Promise.reject(new Error("请至少选择一个数据源"))
+        throw new Error("请至少选择一个数据源")
       }
       if (includesGitHub && resolvedGithubPackIds.length === 0) {
-        return Promise.reject(new Error("请至少选择一个 GitHub Provider 包"))
+        throw new Error("请至少选择一个 GitHub Provider 包")
       }
       const serialized = serializeSources(launchSources)
       if (!serialized) {
-        return Promise.reject(new Error("请至少选择一个数据源"))
+        throw new Error("请至少选择一个数据源")
       }
       const enrich =
         isManualLane && manualEnrich.length > 0
           ? ([...manualEnrich].sort() as ManualEnrichEngine[])
           : []
+      if (proxySubEnabled) {
+        const packed = serializeExperimentalProxyPacks(experimentalPacks)
+        const saved = settingsQuery.data?.proxy_sub_extra_packs ?? ""
+        if (packed !== saved) {
+          await api.updateSettings({ proxy_sub_extra_packs: packed })
+          await queryClient.invalidateQueries({ queryKey: ["settings"] })
+          setExperimentalPacksOverride(null)
+        }
+      }
       return api.scanStart(
         serialized.source,
         mode,
@@ -755,6 +800,29 @@ export function ScanConsole({
               </span>
             )}
           </div>
+        ) : null}
+
+        {includesDiscoveryForProxy && !proxySubEnabled && !running ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border-primary bg-surface-inset px-3 py-2.5">
+            <span className="font-mono text-[11px] text-text-muted">机场订阅发现未开启。</span>
+            <Link
+              to="/settings"
+              className="font-mono text-[11px] text-accent underline-offset-2 hover:underline"
+            >
+              前往设置开启
+            </Link>
+          </div>
+        ) : null}
+
+        {showExperimentalProxyPanel ? (
+          <ExperimentalProxyPacksPanel
+            variant="compact"
+            collapsible
+            value={experimentalPacks}
+            disabled={running}
+            pendingSync={experimentalPacksDirty}
+            onChange={(ids) => setExperimentalPacksOverride(ids)}
+          />
         ) : null}
 
         <div className="flex flex-wrap items-center gap-3.5">

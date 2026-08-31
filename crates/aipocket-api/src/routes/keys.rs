@@ -4,7 +4,8 @@ use crate::{
     routes::{ops::record_audit, shared::valid_kind},
     state::AppState,
 };
-use aipocket_core::Credential;
+use aipocket_core::{CREDENTIAL_KIND_PROXY_SUB, Credential, is_proxy_sub_credential};
+use aipocket_prober::clash_subscription;
 use aipocket_db::mask_apikey;
 use axum::{
     Json,
@@ -119,6 +120,16 @@ pub(crate) async fn key_models(
             "apikey required",
         ));
     }
+    ensure_ai_credential(
+        &s,
+        b.result_id,
+        &Credential {
+            apikey: b.apikey.clone(),
+            apiurl: b.apiurl.clone(),
+            ..Default::default()
+        },
+    )
+    .await?;
     let probe = s
         .balance
         .probe_models(Credential {
@@ -251,6 +262,16 @@ pub(crate) async fn key_balance(
             "apikey required",
         ));
     }
+    ensure_ai_credential(
+        &s,
+        b.result_id,
+        &Credential {
+            apikey: b.apikey.clone(),
+            apiurl: b.apiurl.clone(),
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(Json(
         probe_and_persist_balance(
             &s,
@@ -330,6 +351,8 @@ pub(crate) async fn keys_balance(
             let provider = normalized_batch_provider(&row);
             let result = if provider != requested_provider {
                 json!({"result_id":result_id,"ok":false,"error":"provider mismatch"})
+            } else if is_proxy_sub_row(&row) {
+                json!({"result_id":result_id,"ok":false,"error":"unsupported credential kind"})
             } else {
                 let credential = row
                     .get("credential")
@@ -391,6 +414,16 @@ pub(crate) async fn key_chat(
             "apikey required",
         ));
     }
+    ensure_ai_credential(
+        &s,
+        None,
+        &Credential {
+            apikey: b.apikey.clone(),
+            apiurl: b.apiurl.clone(),
+            ..Default::default()
+        },
+    )
+    .await?;
     if b.model.is_empty() {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -431,6 +464,7 @@ pub(crate) struct RevealRequest {
     run_id: String,
     #[serde(default = "valid_kind")]
     kind: String,
+    result_id: Option<i64>,
     masked: Option<String>,
     apiurl: Option<String>,
     index: Option<usize>,
@@ -441,6 +475,49 @@ pub(crate) async fn key_reveal(
     headers: HeaderMap,
     Json(b): Json<RevealRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(result_id) = b.result_id {
+        let rows = s.repository.records_by_ids(&[result_id]).await?;
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "key not found"))?;
+        let key = row
+            .pointer("/credential/apikey")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let url = row
+            .pointer("/credential/apiurl")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let product = row
+            .pointer("/credential/product")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let credential_kind = row
+            .pointer("/credential/credential_kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        record_audit(
+            &s,
+            &headers,
+            "reveal",
+            json!({
+                "masked": mask_apikey(key),
+                "product": product,
+                "credential_kind": credential_kind,
+                "result_id": result_id,
+            }),
+        )
+        .await;
+        if credential_kind == CREDENTIAL_KIND_PROXY_SUB {
+            return Ok(Json(json!({
+                "subscription_url": url,
+                "apikey": key,
+                "apiurl": url,
+            })));
+        }
+        return Ok(Json(json!({"apikey": key, "apiurl": url})));
+    }
     let rows = s.repository.run_records(&b.run_id, &b.kind, false).await?;
     for (i, row) in rows.into_iter().enumerate() {
         let key = row
@@ -457,13 +534,34 @@ pub(crate) async fn key_reveal(
                 && b.apiurl.as_deref().is_none_or(|v| v == url))
         {
             let masked = b.masked.clone().unwrap_or_else(|| mask_apikey(key));
+            let credential_kind = row
+                .pointer("/credential/credential_kind")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let product = row
+                .pointer("/credential/product")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             record_audit(
                 &s,
                 &headers,
                 "reveal",
-                json!({"masked": masked, "run_id": b.run_id, "kind": b.kind}),
+                json!({
+                    "masked": masked,
+                    "product": product,
+                    "credential_kind": credential_kind,
+                    "run_id": b.run_id,
+                    "kind": b.kind,
+                }),
             )
             .await;
+            if credential_kind == CREDENTIAL_KIND_PROXY_SUB {
+                return Ok(Json(json!({
+                    "subscription_url": url,
+                    "apikey": key,
+                    "apiurl": url,
+                })));
+            }
             return Ok(Json(json!({"apikey":key,"apiurl":url})));
         }
     }
@@ -583,11 +681,86 @@ pub(crate) async fn export(
                 "csv",
             )
         }
-        "sub2api" => (
-            serde_json::to_vec_pretty(&sub2api_payload(&rows)).map_err(ApiError::internal)?,
-            "application/json",
-            "sub2api.json",
-        ),
+        "sub2api" => {
+            let ai_rows: Vec<Value> = rows
+                .iter()
+                .filter(|row| !is_proxy_sub_row(row))
+                .cloned()
+                .collect();
+            (
+                serde_json::to_vec_pretty(&sub2api_payload(&ai_rows))
+                    .map_err(ApiError::internal)?,
+                "application/json",
+                "sub2api.json",
+            )
+        }
+        "subscription-url" => {
+            let lines = rows
+                .iter()
+                .filter(|row| is_proxy_sub_row(row))
+                .filter_map(|row| {
+                    row.pointer("/credential/apiurl")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect::<Vec<_>>();
+            (
+                lines.join("\n").into_bytes(),
+                "text/plain; charset=utf-8",
+                "subscription-url.txt",
+            )
+        }
+        "clash-body" => {
+            let proxy_rows: Vec<_> = rows.iter().filter(|row| is_proxy_sub_row(row)).collect();
+            if proxy_rows.is_empty() {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "clash-body export requires proxy_sub rows",
+                ));
+            }
+            let requested = proxy_rows.len();
+            let mut parts = Vec::with_capacity(requested);
+            let mut fetched = 0_u64;
+            let mut failed = 0_u64;
+            for row in proxy_rows {
+                let url = row
+                    .pointer("/credential/apiurl")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if url.is_empty() {
+                    failed += 1;
+                    continue;
+                }
+                match clash_subscription::fetch_subscription_body(&s.http, url).await {
+                    Ok(body) => {
+                        fetched += 1;
+                        parts.push(format!("# {url}\n{body}\n"));
+                    }
+                    Err(error) => {
+                        failed += 1;
+                        parts.push(format!("# {url}\n# error: {error}\n"));
+                    }
+                }
+            }
+            record_audit(
+                &s,
+                &headers,
+                "export_clash_body",
+                json!({
+                    "dataset": b.dataset,
+                    "requested": requested,
+                    "fetched": fetched,
+                    "failed": failed,
+                }),
+            )
+            .await;
+            (
+                parts.join("\n---\n").into_bytes(),
+                "text/plain; charset=utf-8",
+                "clash-body.txt",
+            )
+        }
         "json" => (
             serde_json::to_vec_pretty(&rows).map_err(ApiError::internal)?,
             "application/json",
@@ -597,21 +770,23 @@ pub(crate) async fn export(
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "bad_request",
-                "format must be json, csv, or sub2api",
+                "format must be json, csv, sub2api, subscription-url, or clash-body",
             ));
         }
     };
-    record_audit(
-        &s,
-        &headers,
-        "export",
-        json!({
-            "dataset": b.dataset,
-            "format": b.format,
-            "count": rows.len(),
-        }),
-    )
-    .await;
+    if b.format != "clash-body" {
+        record_audit(
+            &s,
+            &headers,
+            "export",
+            json!({
+                "dataset": b.dataset,
+                "format": b.format,
+                "count": rows.len(),
+            }),
+        )
+        .await;
+    }
     Ok((
         [
             (header::CONTENT_TYPE, media),
@@ -643,6 +818,38 @@ pub(crate) fn export_provider(row: &Value) -> &str {
         .and_then(Value::as_str)
         .or_else(|| row.get("provider").and_then(Value::as_str))
         .unwrap_or("openai")
+}
+
+pub(crate) fn is_proxy_sub_row(row: &Value) -> bool {
+    row.pointer("/credential/credential_kind")
+        .and_then(Value::as_str)
+        == Some(CREDENTIAL_KIND_PROXY_SUB)
+        || row.get("credential_kind").and_then(Value::as_str) == Some(CREDENTIAL_KIND_PROXY_SUB)
+}
+
+async fn ensure_ai_credential(
+    s: &AppState,
+    result_id: Option<i64>,
+    credential: &Credential,
+) -> Result<(), ApiError> {
+    if is_proxy_sub_credential(credential) {
+        return Err(proxy_sub_unsupported());
+    }
+    if let Some(result_id) = result_id {
+        let rows = s.repository.records_by_ids(&[result_id]).await?;
+        if rows.iter().any(is_proxy_sub_row) {
+            return Err(proxy_sub_unsupported());
+        }
+    }
+    Ok(())
+}
+
+fn proxy_sub_unsupported() -> ApiError {
+    ApiError::new(
+        StatusCode::BAD_REQUEST,
+        "bad_request",
+        "unsupported credential kind",
+    )
 }
 
 pub(crate) fn sub2api_payload(rows: &[Value]) -> Value {

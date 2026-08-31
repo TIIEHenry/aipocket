@@ -65,7 +65,7 @@ summary: "AIPocket 全局文档导航；含验证状态机、Redis 契约、crat
 | **aipocket-db** | SQLx、Redis dedup/lease | [README](../crates/aipocket-db/README.md) |
 | **aipocket-clients** | FOFA / Shodan / GitHub / Tavily | [README](../crates/aipocket-clients/README.md) |
 | **aipocket-discovery** | Sources + Provider Packs | [README](../crates/aipocket-discovery/README.md) · [packs](../crates/aipocket-discovery/docs/packs.md) |
-| **aipocket-prober** | Prober、风险门控、Validator | [README](../crates/aipocket-prober/README.md) · [风险门控](../crates/aipocket-prober/docs/risk-gating.md) |
+| **aipocket-prober** | Prober、风险门控、Validator | [README](../crates/aipocket-prober/README.md) · [风险门控](../crates/aipocket-prober/docs/risk-gating.md) · [机场标签](../crates/aipocket-prober/docs/proxy-sub-tags.md) |
 | **aipocket-services** | Scanner / Balance / Scheduler | [README](../crates/aipocket-services/README.md) |
 | **aipocket-api** | Axum 路由、JWT、SSE | [README](../crates/aipocket-api/README.md) |
 | **frontend** | React UI | [README](../frontend/README.md) |

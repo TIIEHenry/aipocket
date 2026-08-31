@@ -1,4 +1,7 @@
-use aipocket_core::{Credential, ValidationResult, extract_recon_keys, is_recon_credential};
+use aipocket_core::{
+    CREDENTIAL_KIND_PROXY_SUB, Credential, ValidationResult, extract_recon_keys,
+    extract_subscription_urls, is_proxy_sub_credential, is_recon_credential,
+};
 use regex::Regex;
 use serde_json::{Map, Value};
 use std::{
@@ -104,6 +107,14 @@ pub fn extract_credentials(hits: &[Value]) -> Vec<Credential> {
             if credential.backend.is_empty() {
                 credential.backend = "github".into();
             }
+            if is_proxy_sub_credential(&credential) {
+                if !credential.apiurl.is_empty()
+                    && seen.insert((credential.apiurl.clone(), credential.apiurl.clone()))
+                {
+                    output.push(credential);
+                }
+                continue;
+            }
             if !credential.apikey.is_empty()
                 && !is_noise(&credential.apikey)
                 && seen.insert((credential.apikey.clone(), credential.apiurl.clone()))
@@ -207,6 +218,42 @@ pub fn extract_credentials(hits: &[Value]) -> Vec<Credential> {
                 });
             }
         }
+        let product = hit
+            .get("_product")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        for (field, source_type) in [
+            ("header", "header"),
+            ("banner", "banner"),
+            ("body", "body"),
+            ("cert", "fingerprint"),
+            ("title", "fingerprint"),
+        ] {
+            let Some(text) = hit.get(field).and_then(Value::as_str) else {
+                continue;
+            };
+            for sub in extract_subscription_urls(text, host, product) {
+                if seen.insert((sub.apiurl.clone(), sub.apiurl.clone())) {
+                    output.push(Credential {
+                        apikey: sub.token,
+                        apiurl: sub.apiurl,
+                        source: "sub_pattern".into(),
+                        source_type: source_type.into(),
+                        backend: source.into(),
+                        host: host.into(),
+                        ip: hit
+                            .get("ip")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .into(),
+                        port: hit.get("port").map(value_to_string).unwrap_or_default(),
+                        product: sub.product,
+                        credential_kind: CREDENTIAL_KIND_PROXY_SUB.into(),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
     }
     prefilter(output)
 }
@@ -226,6 +273,9 @@ pub fn prefilter(credentials: Vec<Credential>) -> Vec<Credential> {
     credentials
         .into_iter()
         .filter(|credential| {
+            if is_proxy_sub_credential(credential) {
+                return !credential.apiurl.is_empty();
+            }
             !is_noise(&credential.apikey)
                 && (!blocked_key_format(&credential.apikey) || is_recon_credential(credential))
                 && locations
@@ -247,6 +297,19 @@ pub fn finalize_results(
     let mut valid = Vec::new();
     let mut suspicious = Vec::new();
     for mut result in results.drain(..) {
+        if is_proxy_sub_credential(&result.credential) {
+            if !result.valid {
+                continue;
+            }
+            if result.suspicious || result.validation_state == "rate_limited_unconfirmed" {
+                result.suspicious = true;
+                suspicious.push(result);
+            } else if result.valid {
+                result.validation_state = "final_verified".into();
+                valid.push(result);
+            }
+            continue;
+        }
         if !result.valid {
             continue;
         }
@@ -266,7 +329,9 @@ pub fn finalize_results(
                 )
             })
             .count();
-        if blocked_key_format(&result.credential.apikey) && !is_recon_credential(&result.credential)
+        if blocked_key_format(&result.credential.apikey)
+            && !is_recon_credential(&result.credential)
+            && !is_proxy_sub_credential(&result.credential)
         {
             reject(&mut result, "blocked-key-format:non-llm-token");
         } else if zero_width >= 10 {
@@ -298,7 +363,28 @@ pub fn finalize_results(
     (valid, suspicious)
 }
 
+pub fn partition_proxy_failures(
+    outcomes: Vec<ValidationResult>,
+) -> (Vec<ValidationResult>, Vec<ValidationResult>) {
+    let mut rest = Vec::new();
+    let mut unavailable = Vec::new();
+    for mut result in outcomes {
+        if is_proxy_sub_credential(&result.credential) && !result.valid {
+            if result.validation_state.is_empty() {
+                result.validation_state = "rejected".into();
+            }
+            unavailable.push(result);
+        } else {
+            rest.push(result);
+        }
+    }
+    (rest, unavailable)
+}
+
 pub fn high_value_record(result: &ValidationResult, run_id: &str) -> Option<Value> {
+    if is_proxy_sub_credential(&result.credential) {
+        return None;
+    }
     if result.suspicious
         || result.validation_state != "final_verified"
         || result.status_code != Some(200)

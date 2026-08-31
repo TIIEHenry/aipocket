@@ -8,6 +8,7 @@ pub enum ProtocolFamily {
     Gemini,
     Vertex,
     AwsBedrock,
+    ClashSubscription,
 }
 #[derive(Clone, Debug)]
 pub struct ProviderSpec {
@@ -24,6 +25,15 @@ pub struct ProviderResolution {
     pub spec: &'static ProviderSpec,
     pub reason: &'static str,
 }
+static PROXY_SUB: ProviderSpec = ProviderSpec {
+    name: "proxy_sub",
+    category: "proxy_sub",
+    domain_suffixes: &[],
+    key_prefixes: &[],
+    protocol: ProtocolFamily::ClashSubscription,
+    models: &[],
+    official_api_url: "",
+};
 static UNKNOWN: ProviderSpec = ProviderSpec {
     name: "unknown",
     category: "unknown",
@@ -324,6 +334,12 @@ impl ProviderRegistry {
         apikey: &str,
         product: &str,
     ) -> ProviderResolution {
+        if is_proxy_subscription(apiurl, product) {
+            return ProviderResolution {
+                spec: &PROXY_SUB,
+                reason: "proxy_sub_path",
+            };
+        }
         if let Some(name) = recon_product(product)
             && let Some(spec) = SPECS.iter().find(|spec| spec.name == name)
         {
@@ -360,6 +376,17 @@ impl ProviderRegistry {
     pub fn specs(&self) -> HashMap<&'static str, &'static ProviderSpec> {
         SPECS.iter().map(|spec| (spec.name, spec)).collect()
     }
+}
+
+fn is_proxy_subscription(apiurl: &str, product: &str) -> bool {
+    if product.starts_with("proxy_") {
+        return true;
+    }
+    let lower = apiurl.to_ascii_lowercase();
+    lower.contains("/client/subscribe")
+        || lower.contains("/client/sub?")
+        || lower.contains("/link/")
+        || lower.contains("/sub/")
 }
 #[cfg(test)]
 mod tests {

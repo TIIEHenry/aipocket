@@ -2,12 +2,15 @@
 title: "Development Progress"
 type: progress
 status: current
-updated: 2026-08-30
+updated: 2026-08-31
 summary: "FOFA/Shodan 泄露扫描闭环：上下文提取、官方验证、三源 pack"
 ---
 
 # Current session
 
+- 2026-08-31：P2 — 待取证面板（实验 proxy pack 勾选 UI）、`PROXY_SUB_FOFA_BODY`、`PROXY_SUB_EXTRA_PACKS`、`clash-body` 导出。
+- 2026-08-31：P1 — 前端 `proxy_sub` 筛选/复制订阅链、设置页 `PROXY_SUB_*`、`PROXY_PACKS` 扩展（marzban/3xui/clash_env/subconverter）；知识层文档 §9。
+- 2026-08-31：ADR-005 **accepted** — [clash-subscription-discovery](../plans/clash-subscription-discovery.md) 吸收 Grok 二轮：完整订阅 URL、`Credential.credential_kind`、GitHub artifacts P0、mask raw_context、reveal by result_id、finalize 保留失败链、proxy 预算追加。
 - 2026-08-30：ADR-004 — `GET /api/ready` 探 PG/Redis；`GET /api/audit`；reveal/chat/export/restart 写 `audit_events`（无明文密钥）。
 
 # Completed

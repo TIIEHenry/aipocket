@@ -61,7 +61,7 @@ HTTP `scan_start` 与 CLI `run_scan` 都调用 `aipocket_services::assemble_sour
 
 有意行为变更：缺少 FOFA/SHODAN keys 时跳过该源（可见），不再挂上空客户端再逐条失败。
 
-Budget：`FOFA_QUERY_BUDGET`、`SHODAN_QUERY_BUDGET`、`GITHUB_COMMIT_QUERY_BUDGET`、`GITHUB_CODE_QUERY_BUDGET`。Hits 按页 spill 到 `scan_discovery_hits`（每个 `DiscoverySource::fetch` 返回后立刻写入）；有 PG 时 Scanner 不保留 O(total_hits) 的 banner。单源 fetch 内部仍可能缓冲该源本轮结果。
+Budget：`FOFA_QUERY_BUDGET`、`SHODAN_QUERY_BUDGET`、`GITHUB_COMMIT_QUERY_BUDGET`、`GITHUB_CODE_QUERY_BUDGET`。`PROXY_SUB_ENABLED=true` 时 **追加** `PROXY_SUB_QUERY_BUDGET` 条 proxy 查询（不从 AI 预算切片）。Hits 按页 spill 到 `scan_discovery_hits`（每个 `DiscoverySource::fetch` 返回后立刻写入）；有 PG 时 Scanner 不保留 O(total_hits) 的 banner。单源 fetch 内部仍可能缓冲该源本轮结果。
 
 FOFA 行规范化为 `header`/`banner`（不是 `body`）；Shodan `data`→`header`、`http.html`→`banner`，供提取器扫描。
 
@@ -71,6 +71,7 @@ FOFA 行规范化为 `header`/`banner`（不是 `body`）；Shodan `data`→`hea
 - 候选 spill 到 `scan_candidates`（`stage` = regex / prober / github / gpt）。
 - Prober：产品规格 + 风险门控，默认 L0。见 [风险门控](../../crates/aipocket-prober/docs/risk-gating.md)。
 - 无 `GPT_KEY` 则跳过 GPT。失败项可经 `/api/runs/{id}/retry-gpt-failed` 重试。
+- **`proxy_sub`**：`credential_kind=proxy_sub` 的候选不走 GPT recheck；finalize 后跳过 balance 与高价值入库。
 
 ## 验证与收尾
 

@@ -2,13 +2,32 @@
 title: "Provider Packs"
 type: architecture
 status: current
-updated: 2026-08-29
-summary: "按产品组织的 FOFA/Shodan/GitHub 查询包；与 legacy_queries 合并后交给 DiscoverySource"
+updated: 2026-08-31
+summary: "按产品组织的 FOFA/Shodan/GitHub 查询包；AI PACKS 与 PROXY_PACKS 分离"
 ---
 
 # Provider Packs
 
-查询字符串的真源是 `packs.rs` 的 `PACKS` 与 `legacy_queries.rs`。本文只说明怎么组合，不抄查询原文。
+查询字符串的真源是 `packs.rs` 的 `PACKS`（AI）与 `proxy_packs.rs` 的 `PROXY_PACKS`（机场），以及 `legacy_queries.rs`。本文只说明怎么组合，不抄查询原文。
+
+## Proxy pack（`PROXY_PACKS`）
+
+与 AI `PACKS` **分离**。仅当 `PROXY_SUB_ENABLED=true`（默认 false）时由 `assemble_sources` 追加查询与 GitHub terms。
+
+| Pack id | 面板 / 场景 |
+|---------|-------------|
+| `proxy_v2board` | V2Board `/api/v1/client/subscribe?token=` |
+| `proxy_sspanel` | SSPanel `/link/{token}`、`SUBSCRIBE_URL` |
+| `proxy_marzban` | Marzban `/sub/{token}` |
+| `proxy_3xui` | 3x-ui / x-ui 订阅路径 |
+| `proxy_clash_env` | `CLASH_SUB_URL` / `SUBSCRIBE_URL` 环境变量泄露 |
+| `proxy_subconverter` | subconverter 相关页面与配置 |
+
+**实验性 pack**（`PROXY_SUB_EXTRA_PACKS`，设置页 / 扫描页「待取证 pack」勾选）：`proxy_nezha`、`proxy_wings`、`proxy_mqpanel`、`proxy_node_uri`。与基础 `PROXY_PACKS` 合并选用，未知 id 忽略。
+
+`PROXY_SUB_FOFA_BODY=true` 且 `PROXY_SUB_ENABLED` 时，FOFA 请求 `fields` 追加 `body`（配额更高；列表仍走 `mask_record`）。
+
+`github_pack_ids` 空 / `all` **仅选 AI pack**；proxy 不由 GitHub pack 多选控制，而由 `PROXY_SUB_ENABLED` 开关。
 
 导出格式 `sub2api` 与发现产品 id `sub2api_panel` 不是同一个名字；CPA 对应 `cliproxyapi`。中转面板查询在 `legacy_queries` 的 `PRODUCT_QUERIES`。Cursor（`api.cursor.com` + `crsr_`）与火山方舟（`ark.*.volces.com` + `ark-`）用 `domain_key_pack!`；增量 FOFA 的 DIRECT 列表也包含这两类表达式，不勾 pack 也会搜。`fofa_leak` / `shodan_leak` 搜环境变量名（`FOFA_API_KEY` 等），`query_priority` 为 850，保证默认增量预算能排到。
 

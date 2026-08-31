@@ -1,5 +1,5 @@
 use crate::RequestLedgerEntry;
-use aipocket_core::{HoneypotSite, ManualTarget, RunDay, RunSummary};
+use aipocket_core::{HoneypotSite, ManualTarget, RunDay, RunSummary, mask_subscription_url};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -1133,8 +1133,23 @@ pub fn mask_apikey(key: &str) -> String {
     format!("{start}****{}", &key[tail_start..])
 }
 fn mask_record(record: &mut Value) {
+    let proxy_sub = record
+        .pointer("/credential/credential_kind")
+        .and_then(Value::as_str)
+        == Some("proxy_sub");
     if let Some(key) = record.pointer_mut("/credential/apikey") {
         *key = Value::String(mask_apikey(key.as_str().unwrap_or_default()));
+    }
+    if proxy_sub {
+        if let Some(url) = record.pointer_mut("/credential/apiurl") {
+            *url = Value::String(mask_subscription_url(url.as_str().unwrap_or_default()));
+        }
+        if let Some(ctx) = record.pointer_mut("/credential/raw_context") {
+            *ctx = Value::String("[redacted]".into());
+        }
+        if let Some(snippet) = record.get_mut("response_snippet") {
+            *snippet = Value::String("[redacted]".into());
+        }
     }
 }
 fn validate_kind(kind: &str) -> Result<()> {

@@ -34,16 +34,29 @@ impl Validator {
                 models_available: vec![],
                 models_verified: vec![],
                 balance_provider: String::new(),
-                credential_issuer: resolution.spec.name.into(),
+                credential_issuer: if credential.product.is_empty() {
+                    resolution.spec.name.into()
+                } else {
+                    credential.product.clone()
+                },
                 issuer_evidence: resolution.reason.into(),
                 served_model_families: vec![],
                 evidence_source: "validation".into(),
                 evidence_kind: "models".into(),
                 evidence_observed_at: chrono::Utc::now().to_rfc3339(),
             },
+            credential_kind: credential.credential_kind.clone(),
             validated_at: chrono::Utc::now().to_rfc3339(),
             ..Default::default()
         };
+        if resolution.spec.protocol == ProtocolFamily::ClashSubscription {
+            return crate::clash_subscription::validate_subscription(
+                &self.http,
+                &credential,
+                result.provider_info,
+            )
+            .await;
+        }
         if base.is_empty() {
             result.error = "no API URL".into();
             result.validation_state = "rejected".into();
@@ -103,7 +116,15 @@ impl Validator {
                     .send()
                     .await?
             }
-            _ => {
+            ProtocolFamily::ClashSubscription => {
+                return crate::clash_subscription::validate_subscription(
+                    &self.http,
+                    &credential,
+                    result.provider_info,
+                )
+                .await;
+            }
+            ProtocolFamily::OpenAiCompatible | ProtocolFamily::Vertex => {
                 let base = base.trim_end_matches('/');
                 self.http
                     .get(if base.ends_with("/v1") {

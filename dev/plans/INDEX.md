@@ -2,7 +2,7 @@
 title: "方案索引"
 type: index
 status: current
-updated: 2026-08-30
+updated: 2026-08-31
 summary: "dev/plans 导航"
 ---
 
@@ -15,3 +15,4 @@ summary: "dev/plans 导航"
 | [pipeline-phase-spill](pipeline-phase-spill.md) | implemented | [ADR-002](../decisions/002-pipeline-phase-spill.md) |
 | [scan-assembly-and-routes-split](scan-assembly-and-routes-split.md) | implemented | [ADR-003](../decisions/003-scan-assembly-in-services.md) |
 | [readiness-and-audit](readiness-and-audit.md) | implemented | [ADR-004](../decisions/004-readiness-and-audit.md) |
+| [clash-subscription-discovery](clash-subscription-discovery.md) | draft | [ADR-005](../decisions/005-clash-subscription-in-pipeline.md) |

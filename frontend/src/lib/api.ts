@@ -34,9 +34,12 @@ export type GitHubPackId =
   | "volcengine_ark"
   | "fofa_leak"
   | "shodan_leak"
-export type ExportFormat = "json" | "csv" | "sub2api"
+export type ExportFormat = "json" | "csv" | "sub2api" | "subscription-url" | "clash-body"
 export type ExportDataset = "selected" | "run" | "high-value" | "all"
 export type ResultKind = "valid" | "suspicious" | "unavailable"
+export type CredentialKindFilter = "all" | "ai" | "proxy_sub"
+
+export const PROXY_SUB_KIND = "proxy_sub"
 
 export interface LoginResponse {
   token: string
@@ -111,6 +114,7 @@ export interface ChatResponse {
 
 export interface RevealRequest {
   run_id: string
+  result_id?: number
   masked?: string
   apiurl?: string
   index?: number
@@ -120,6 +124,7 @@ export interface RevealRequest {
 export interface RevealResponse {
   apikey: string
   apiurl: string
+  subscription_url?: string
 }
 
 export interface ExportRequest {
@@ -222,6 +227,12 @@ export interface SettingsView {
   shodan_query_budget: number
   validate_concurrency: number
   prober_concurrency: number
+  proxy_sub_enabled: boolean
+  proxy_sub_query_budget: number
+  proxy_sub_validate_enabled: boolean
+  proxy_sub_insecure_tls: boolean
+  proxy_sub_fofa_body: boolean
+  proxy_sub_extra_packs: string
 }
 
 export type SettingsUpdate = Partial<SettingsView>
@@ -277,6 +288,7 @@ export interface Credential {
   raw_context: string
   leak_host: string
   routed_to_official: boolean
+  credential_kind?: string
 }
 
 export interface ProviderInfo {
@@ -706,8 +718,15 @@ export const api = {
     }
     if (!res.ok) throw await parseError(res)
     const blob = await res.blob()
-    const fallback = `aipocket-export.${body.format === "sub2api" ? "sub2api.json" : body.format ?? "json"}`
-    triggerBlobDownload(blob, filenameFromDisposition(res.headers.get("content-disposition"), fallback))
+    const fallback =
+      body.format === "sub2api"
+        ? "sub2api.json"
+        : body.format === "subscription-url"
+          ? "subscription-url.txt"
+          : body.format === "clash-body"
+            ? "clash-body.txt"
+            : body.format ?? "json"
+    triggerBlobDownload(blob, filenameFromDisposition(res.headers.get("content-disposition"), `aipocket-export.${fallback}`))
   },
 
   // Scan

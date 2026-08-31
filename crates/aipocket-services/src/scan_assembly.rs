@@ -3,9 +3,10 @@ use std::sync::Arc;
 use aipocket_clients::{FofaClient, GithubClient, ShodanClient};
 use aipocket_core::{Settings, SkippedSource};
 use aipocket_discovery::{
-    DiscoverySource, compose_queries,
+    DiscoverySource, compose_proxy_queries, compose_queries,
     legacy_queries::prioritize_fofa_queries,
-    packs,
+    merge_proxy_queries, packs,
+    proxy_packs::{selected_proxy_packs},
     sources::{FofaSource, GithubSource, ManualEnrichSource, ManualSource, ShodanSource},
 };
 
@@ -28,18 +29,23 @@ pub fn assemble_sources(
     params: &AssembleParams,
 ) -> ScanPlan {
     let wants = |name: &str| params.requested.iter().any(|v| v == "all" || v == name);
-    let registry = packs::registry();
-    let selected: Vec<_> =
+    let ai_registry = packs::registry();
+    let selected_ai: Vec<_> =
         if params.github_pack_ids.is_empty() || params.github_pack_ids.iter().any(|v| v == "all") {
-            registry.values().copied().collect()
+            ai_registry.values().copied().collect()
         } else {
             params
                 .github_pack_ids
                 .iter()
-                .filter_map(|id| registry.get(id.as_str()).copied())
+                .filter_map(|id| ai_registry.get(id.as_str()).copied())
                 .collect()
         };
-    let q = compose_queries(&selected);
+    let mut q = compose_queries(&selected_ai);
+    if settings.proxy_sub_enabled {
+        let proxy_selected = selected_proxy_packs(&settings.proxy_sub_extra_pack_list());
+        let q_proxy = compose_proxy_queries(&proxy_selected);
+        merge_proxy_queries(&mut q, q_proxy, settings.proxy_sub_query_budget);
+    }
 
     let mut sources: Vec<Arc<dyn DiscoverySource>> = Vec::new();
     let mut skipped: Vec<SkippedSource> = Vec::new();
@@ -143,7 +149,7 @@ mod tests {
 
     #[test]
     fn github_skipped_without_token_and_pg() {
-        let settings = Settings::default(); // no github token, no DATABASE_URL
+        let settings = Settings::default();
         let plan = assemble_sources(&settings, &http(), &params(&["github"]));
         assert!(plan.sources.iter().all(|s| s.name() != "github"));
         assert!(plan.skipped.iter().any(|s| s.source == "github"));
@@ -170,5 +176,27 @@ mod tests {
         let plan = assemble_sources(&settings, &http(), &params(&["fofa"]));
         assert!(plan.sources.iter().any(|s| s.name() == "fofa"));
         assert!(plan.skipped.iter().all(|s| s.source != "fofa"));
+    }
+
+    #[test]
+    fn proxy_queries_prepended_when_enabled() {
+        let settings = Settings {
+            fofa_keys: "k1".into(),
+            proxy_sub_enabled: true,
+            proxy_sub_query_budget: 2,
+            ..Default::default()
+        };
+        let plan = assemble_sources(&settings, &http(), &params(&["fofa"]));
+        let fofa = plan
+            .sources
+            .iter()
+            .find(|s| s.name() == "fofa")
+            .expect("fofa source");
+        let queries = fofa.query_ids();
+        assert!(
+            queries
+                .first()
+                .is_some_and(|q| q.contains("subscribe?token="))
+        );
     }
 }

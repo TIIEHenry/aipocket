@@ -334,6 +334,20 @@ pub fn query_priority(query: &str) -> u16 {
     if query.contains("DANGEROUSLY_DISABLE_AUTH") {
         return 650;
     }
+    if [
+        "subscribe?token=",
+        "/client/subscribe",
+        "/client/sub?",
+        "subscribe_url",
+        "clash_sub_url",
+        "/link/",
+        "/sub/",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
+    {
+        return 250;
+    }
     if has_key_token && query.contains("status_code") {
         return 400;
     }

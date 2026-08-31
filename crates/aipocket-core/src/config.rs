@@ -104,6 +104,13 @@ pub struct Settings {
     pub github_file_history_enabled: bool,
     pub github_file_history_commit_limit: usize,
     pub github_rate_limit_max_wait_seconds: f64,
+    pub proxy_sub_enabled: bool,
+    pub proxy_sub_query_budget: usize,
+    pub proxy_sub_validate_enabled: bool,
+    pub proxy_sub_insecure_tls: bool,
+    pub proxy_sub_fofa_body: bool,
+    /// Comma-separated experimental pack ids (e.g. `proxy_nezha,proxy_wings`).
+    pub proxy_sub_extra_packs: String,
 }
 
 impl Default for Settings {
@@ -202,6 +209,12 @@ impl Default for Settings {
             github_file_history_enabled: true,
             github_file_history_commit_limit: 100,
             github_rate_limit_max_wait_seconds: 90.0,
+            proxy_sub_enabled: false,
+            proxy_sub_query_budget: 8,
+            proxy_sub_validate_enabled: true,
+            proxy_sub_insecure_tls: false,
+            proxy_sub_fofa_body: false,
+            proxy_sub_extra_packs: String::new(),
         }
     }
 }
@@ -330,6 +343,16 @@ impl Settings {
     }
     pub fn github_token_list(&self) -> Vec<&str> {
         split_list(&self.github_tokens)
+    }
+    pub fn proxy_sub_extra_pack_list(&self) -> Vec<&str> {
+        split_list(&self.proxy_sub_extra_packs)
+    }
+    pub fn fofa_search_fields_csv(&self) -> &'static str {
+        if self.proxy_sub_enabled && self.proxy_sub_fofa_body {
+            "host,ip,port,protocol,title,header,banner,server,product,link,domain,cert,body"
+        } else {
+            "host,ip,port,protocol,title,header,banner,server,product,link,domain,cert"
+        }
     }
     pub fn web_cors_origin_list(&self) -> Vec<&str> {
         if self.web_cors_origins.trim().is_empty() || self.web_cors_origins.trim() == "*" {

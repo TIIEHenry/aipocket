@@ -76,14 +76,14 @@ summary: "探活与就绪、审计、扫描启动体、SSE、密钥类请求形�
 
 | 方法 | 路径 | body 要点 | 风险 |
 |------|------|-----------|------|
-| POST | `/api/key/reveal` | `run_id` + `kind` + (`index` 或打码 `masked`) | 返回明文 |
+| POST | `/api/key/reveal` | `run_id` + `kind` +（**优先** `result_id`，或 `index` / 打码 `masked`） | 返回明文；`proxy_sub` 含 `subscription_url` |
 | POST | `/api/high-value/reveal` | 指向高价值行 | 返回明文 |
-| POST | `/api/key/balance` | `apikey`（可用打码+result_id）、可选 `apiurl` | 可能打目标配额 |
+| POST | `/api/key/balance` | `apikey`（可用打码+result_id）、可选 `apiurl` | 可能打目标配额；**`proxy_sub` → 400** |
 | POST | `/api/keys/balance` | 批量；并发受 `BALANCE_BATCH_CONCURRENCY` 限制 | 同上 |
-| POST | `/api/key/models` | 同源 | 拉 `/v1/models` 一类 |
-| POST | `/api/key/chat` | **必须** `model` | **消耗目标额度** |
+| POST | `/api/key/models` | 同源 | 拉 `/v1/models`；**`proxy_sub` → 400** |
+| POST | `/api/key/chat` | **必须** `model` | **消耗目标额度**；**`proxy_sub` → 400** |
 | POST | `/api/keys/status` | `{ "result_ids", "status" }` | 受 ValidationState 迁移表约束 |
-| POST | `/api/export` | `dataset`: selected/run/high-value/all；`format`: json/csv/sub2api | 导出含明文，按 dataset |
+| POST | `/api/export` | `dataset`: selected/run/high-value/all；`format`: json/csv/sub2api/**subscription-url**/**clash-body** | 导出含明文；`sub2api` 排除 `proxy_sub`；`clash-body` 对每条 `proxy_sub` 再 GET 订阅体，审计 action `export_clash_body` |
 
 `kind`：`valid` \| `suspicious`；UI 还有 `unavailable`。
 

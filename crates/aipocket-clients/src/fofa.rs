@@ -15,6 +15,7 @@ pub struct FofaClient {
     base_url: String,
     keys: Vec<String>,
     next_key: Arc<AtomicUsize>,
+    fields: String,
 }
 impl FofaClient {
     pub fn new(http: Client, settings: &Settings) -> Self {
@@ -27,6 +28,7 @@ impl FofaClient {
                 .map(str::to_owned)
                 .collect(),
             next_key: Arc::new(AtomicUsize::new(0)),
+            fields: settings.fofa_search_fields_csv().into(),
         }
     }
     pub async fn search(&self, query: &str, page: u32, size: u32) -> Result<Value> {
@@ -58,11 +60,7 @@ impl FofaClient {
                 ("qbase64", qbase64.as_str()),
                 ("page", &page.to_string()),
                 ("size", &size.to_string()),
-                // Keep field list aligned with Python DEFAULT_FIELDS / discovery FOFA_FIELDS.
-                (
-                    "fields",
-                    "host,ip,port,protocol,title,header,banner,server,product,link,domain,cert",
-                ),
+                ("fields", self.fields.as_str()),
             ])
             .send()
             .await?;

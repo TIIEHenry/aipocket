@@ -1,4 +1,5 @@
 import type { KeyRecord } from "@/lib/api"
+import { PROXY_SUB_KIND } from "@/lib/api"
 import type { KeyRowStatus } from "@/components/key-row"
 
 export interface KeyFields {
@@ -69,6 +70,7 @@ const STATE_LABELS: Record<string, { variant: KeyRowStatus["variant"]; label: st
 export function extractKeyFields(rec: KeyRecord): KeyFields {
   const cred = asRecord(rec.credential)
   const provider = asRecord(rec.provider_info)
+  const credentialKind = text(rec.credential_kind) ?? text(cred.credential_kind)
   return {
     maskedKey: text(cred.apikey) ?? text(rec.apikey) ?? "—",
     apiurl: text(cred.apiurl) ?? text(rec.apiurl),
@@ -76,7 +78,7 @@ export function extractKeyFields(rec: KeyRecord): KeyFields {
     provider: text(provider.provider) ?? text(rec.provider),
     balance: formatBalance(text(rec.balance)),
     tier: text(rec.tier),
-    credentialKind: text(rec.credential_kind),
+    credentialKind,
     validationState: text(rec.validation_state),
     scope: text(rec.scope),
     tierEvidence: text(rec.tier_evidence) ?? text(rec.tier),
@@ -84,6 +86,23 @@ export function extractKeyFields(rec: KeyRecord): KeyFields {
     savedAt: text(rec.saved_at),
     evidence: rec.provider_evidence,
   }
+}
+
+export function isProxySubRecord(rec: KeyRecord): boolean {
+  return extractKeyFields(rec).credentialKind === PROXY_SUB_KIND
+}
+
+export function credentialKindLabel(kind?: string): string {
+  if (kind === PROXY_SUB_KIND) return "机场订阅"
+  return kind ?? ""
+}
+
+export function parseRevealResponse(
+  res: { apikey: string; apiurl: string; subscription_url?: string },
+  fallbackApiurl?: string,
+): { apikey: string; apiurl: string } {
+  const apiurl = res.subscription_url || res.apiurl || fallbackApiurl || ""
+  return { apikey: res.apikey, apiurl }
 }
 
 export function deriveKeyStatus(rec: KeyRecord): KeyRowStatus {

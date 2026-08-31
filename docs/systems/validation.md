@@ -2,8 +2,8 @@
 title: "验证与高价值"
 type: architecture
 status: current
-updated: 2026-08-29
-summary: "ValidationState 迁移、results.kind、以及 high_value_keys 的入库条件"
+updated: 2026-08-31
+summary: "ValidationState 迁移、results.kind、high_value_keys 条件，以及 proxy_sub 机场订阅"
 ---
 
 # 验证与高价值
@@ -56,6 +56,22 @@ Web `POST /api/keys/status` 按 `ValidationState::can_transition` 迁移，不�
 火山方舟 key 前缀 `ark-`：方舟没有公开 `/models`，专项验证走最小化 `chat/completions` 探活（Coding Plan 基座用 `ark-code-latest` 别名），200 且有 `choices`/`usage` 为能用；余额无 API-key 可查的端点，按验证结果记 liveness。
 
 FOFA / Shodan API key 没有独特前缀，必须靠上下文关键字提取（`FOFA_API_KEY=` / JSON `"FOFA_API_KEY":` 等），`product` 标成 `fofa`/`shodan` 并路由到官方接口。是否保留已有 URL 看 **host**（`fofoapi.com` / `fofa.info` / `shodan.io`），query/path 里出现这些域名不算。验证走 `GET /api/v1/info/my?key=`：与发现客户端同一套 error 判定（bool `true`、`"true"`/`"1"`、数字 `1` 为失败），成功还需非空 `email`/`username` 或**数值** `fcoin`（`null` 不算）。Shodan 走 `GET /api-info?key=`（plan/query_credits）。泄漏页 URL 不得当成验证端点。32 位 hex 仅在 `product` 或官方 host 为 FOFA/Shodan 时豁免 `blocked_key_format`。这两种 key 不进高价值列表。
+
+## 机场订阅（`credential_kind = proxy_sub`）
+
+与 AI key 共用 `Credential` / `ValidationResult`，但语义不同：
+
+| 字段 | 含义 |
+|------|------|
+| `credential.apiurl` | **完整** Clash 订阅 URL（含 token 或 `/link/`、`/sub/` 路径） |
+| `credential.apikey` | 提取到的 token 片段（列表与 reveal 均可能打码） |
+| `credential_kind` | 固定 `proxy_sub` |
+
+验证走 `ProtocolFamily::ClashSubscription`：`GET` 订阅 URL（Clash UA）、base64/YAML/URI 解析，**不**调用 `/v1/models`。`PROXY_SUB_VALIDATE_ENABLED=false` 时仅标记 `candidate`，不 GET。
+
+`high_value_record` **永不**收录 `proxy_sub`。Scanner 跳过 balance、GPT recheck。验证失败仍写入 `results`（`kind=unavailable`），完整 `apiurl` 保留供 reveal。
+
+列表 API 对 `proxy_sub` 打码 `apiurl` token、`raw_context`、`response_snippet`。明文仅经 `POST /api/key/reveal`（优先 `result_id`）或 `format=subscription-url` 导出。
 
 ## 相关文档
 

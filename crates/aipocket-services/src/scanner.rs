@@ -1,4 +1,6 @@
-use crate::pipeline::{as_json, extract_credentials, finalize_results, high_value_record};
+use crate::pipeline::{
+    as_json, extract_credentials, finalize_results, high_value_record, partition_proxy_failures,
+};
 use aipocket_core::{Credential, PipelinePhase, ScanMode, ScanProgress, Settings};
 use aipocket_db::{DedupStore, Repository, RequestLedgerEntry, ScanLease};
 use aipocket_discovery::{DiscoveryProgress, DiscoverySource, SourceBudgets};
@@ -453,6 +455,26 @@ impl Scanner {
                             continue;
                         }
                     }
+                    if aipocket_core::is_proxy_sub_credential(&credential)
+                        && !self.settings.proxy_sub_validate_enabled
+                    {
+                        outcomes.push(aipocket_core::ValidationResult {
+                            credential: credential.clone(),
+                            valid: false,
+                            validation_state: "candidate".into(),
+                            credential_kind: aipocket_core::CREDENTIAL_KIND_PROXY_SUB.into(),
+                            validated_at: chrono::Utc::now().to_rfc3339(),
+                            provider_info: aipocket_core::ProviderInfo {
+                                provider: credential.product.clone(),
+                                validation_provider: credential.product.clone(),
+                                category: "proxy_sub".into(),
+                                credential_issuer: credential.product.clone(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        });
+                        continue;
+                    }
                     progress.active_requests += 1;
                     let validator = validator.clone();
                     let semaphore = semaphore.clone();
@@ -535,12 +557,17 @@ impl Scanner {
         self.repository
             .upsert_honeypot_results(&run_id, &outcomes)
             .await?;
+        let (outcomes, unavailable_proxy) = partition_proxy_failures(outcomes);
         let (mut valid_results, mut suspicious_results) = finalize_results(outcomes);
         events.send(ScanEvent::Phase("finalize".into())).ok();
         let balance = crate::BalanceService::new(self.http.clone());
         for result in &mut valid_results {
             if cancel.is_cancelled() {
                 return self.interrupt(&run_id, progress, lease, &events).await;
+            }
+            if aipocket_core::is_proxy_sub_credential(&result.credential) {
+                dedup.set_success(&result.credential, result).await;
+                continue;
             }
             if !policy.require_fresh_balance
                 && let Some(cached) = dedup
@@ -580,6 +607,9 @@ impl Scanner {
         for result in &mut suspicious_results {
             if cancel.is_cancelled() {
                 return self.interrupt(&run_id, progress, lease, &events).await;
+            }
+            if aipocket_core::is_proxy_sub_credential(&result.credential) {
+                continue;
             }
             let enriched = if !policy.require_fresh_balance {
                 dedup
@@ -626,6 +656,10 @@ impl Scanner {
             .iter()
             .map(as_json)
             .collect::<Result<Vec<_>>>()?;
+        let unavailable = unavailable_proxy
+            .iter()
+            .map(as_json)
+            .collect::<Result<Vec<_>>>()?;
         self.write_artifacts(&run_id, &hits, &valid, &suspicious)
             .await?;
         self.repository
@@ -634,6 +668,11 @@ impl Scanner {
         self.repository
             .insert_results(&run_id, "suspicious", &suspicious)
             .await?;
+        if !unavailable.is_empty() {
+            self.repository
+                .insert_results(&run_id, "unavailable", &unavailable)
+                .await?;
+        }
         self.persist_phase(&run_id, PipelinePhase::Finalize, serde_json::json!({}))
             .await?;
         self.persist_phase(

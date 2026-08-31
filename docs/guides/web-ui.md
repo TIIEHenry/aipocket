@@ -2,7 +2,7 @@
 title: "Web UI"
 type: guide
 status: current
-updated: 2026-08-20
+updated: 2026-08-31
 summary: "前端页面与对应能力；截图见 screenshots.md"
 ---
 
@@ -31,6 +31,7 @@ summary: "前端页面与对应能力；截图见 screenshots.md"
 - 数据源：`all` / 单源 / `manual`
 - 模式：incremental（默认）或 full
 - GitHub pack：扫描页默认勾选 DeepSeek / GLM / Kimi / Cursor；空 = 全部；多选收窄 `github_pack_ids`
+- 待取证 pack：`PROXY_SUB_ENABLED=true` 且选了 FOFA/Shodan/GitHub 时，扫描页显示可折叠一行摘要；点开勾选实验性机场 pack，写入 `PROXY_SUB_EXTRA_PACKS`，开始扫描前自动同步设置
 - 自定义狩猎可勾选 FOFA/Shodan 主机名富化（`manual_enrich`）
 - 日志：`EventSource` `/api/scan/logs/stream?token=`
 
